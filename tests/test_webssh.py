@@ -125,9 +125,10 @@ def live_panel(app, users, ssh_server, monkeypatch):
     token = re.search(r'name="csrf-token" content="([^"]+)"', http.get(base + '/login', timeout=5).text)[1]
     result = http.post(base + '/login', data={'email': users[0].email, 'password': 'Test-only-password-123!', 'csrf_token': token}, timeout=5)
     assert result.status_code == 200 and result.url.endswith('/dashboard')
+    dashboard_cookie = '; '.join(f'{key}={value}' for key, value in http.cookies.items())
     html = http.get(base + '/webssh/' + ident, timeout=5).text
     csrf = re.search(r'name="csrf-token" content="([^"]+)"', html)[1]
-    state = {'http': http, 'base': base, 'id': ident, 'csrf': csrf, 'owner': users[0].id}
+    state = {'http': http, 'base': base, 'id': ident, 'csrf': csrf, 'owner': users[0].id, 'dashboard_cookie': dashboard_cookie}
     try:
         yield state
     finally:
@@ -137,8 +138,10 @@ def live_panel(app, users, ssh_server, monkeypatch):
         thread.join(timeout=3)
 
 
-def browser_ws(panel, ident=None, origin=None, cookies=True):
+def browser_ws(panel, ident=None, origin=None, cookies=True, cookie_header=None):
     headers = {'Cookie': '; '.join(f'{key}={value}' for key, value in panel['http'].cookies.items())} if cookies else {}
+    if cookie_header is not None:
+        headers['Cookie'] = cookie_header
     return connect(panel['base'].replace('http:', 'ws:') + '/api/webssh/' + (ident or panel['id']),
                    origin=panel['base'] if origin is None else origin,
                    additional_headers=headers, user_agent_header=panel['http'].headers['User-Agent'],
@@ -394,3 +397,56 @@ def test_pending_input_is_bounded_during_stalled_guest_auth(app, live_panel, ssh
             raise AssertionError('Unbounded pending messages were accepted.')
     wait_for_no_leases()
     assert not ssh_server.sizes  # Never opened a shell after the client flooded.
+
+
+@pytest.mark.parametrize('failure', ['host_key_trusted', 'connected'])
+def test_audit_database_failure_closes_guest_and_releases_lease(app, live_panel, ssh_server, monkeypatch, failure):
+    from sqlalchemy.exc import OperationalError
+    import routes.webssh as routes
+    original = routes.record
+    def unavailable(action, user_id, ident):
+        if action == failure:
+            raise OperationalError('audit storage unavailable', {}, Exception('disposable failure'))
+        original(action, user_id, ident)
+    monkeypatch.setattr(routes, 'record', unavailable)
+    with browser_ws(live_panel) as ws:
+        event = connect_guest(ws, live_panel, ssh_server)
+        assert event['type'] == 'error' and event['code'] == 'service_unavailable'
+    wait_for_no_leases()
+    deadline = time.monotonic() + 3
+    while any(t.is_active() for t in ssh_server.transports) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert all(not t.is_active() for t in ssh_server.transports)
+    assert bool(ssh_server.sizes) is (failure == 'connected')
+    if failure == 'host_key_trusted':
+        assert ssh_server.auth_calls == []
+
+
+
+def test_delayed_dashboard_cookie_refresh_does_not_break_webssh(live_panel, ssh_server):
+    # Deterministically replay the cookie from before WebSSH rendered, as an
+    # in-flight dashboard metrics response can do after page navigation.
+    with browser_ws(live_panel, cookie_header=live_panel['dashboard_cookie']) as ws:
+        assert connect_guest(ws, live_panel, ssh_server)['type'] == 'connected'
+        ws.send(json.dumps({'type': 'disconnect'}))
+        assert receive(ws, 'disconnected')
+    wait_for_no_leases()
+
+
+def test_webssh_reuses_existing_session_seed_without_cookie_schema_change(app, client, users):
+    from services.webssh_access import browser_session
+    signin(client)
+    client.get('/dashboard')
+    with client.session_transaction() as session:
+        before = dict(session)
+    client.get('/webssh')
+    with client.session_transaction() as session:
+        assert dict(session) == before
+        assert 'webssh_session' not in session
+    with app.test_request_context('/'):
+        from flask import session
+        assert browser_session() is None
+        tag = browser_session(create=True)
+        assert len(tag) == 64 and browser_session() == tag
+        session['webssh_session'] = 'preserved-rolling-update-binding'
+        assert browser_session() != tag

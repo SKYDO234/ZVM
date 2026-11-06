@@ -100,6 +100,8 @@ def relay(ws, node, spec, first, check, audit=lambda action: None):
     try:
         check()
         peer = open_stream(node, spec['id'])
+        # Bound TLS relay sends/close without imposing an idle read timeout.
+        peer.socket = ws.watch_transport(peer.socket)
         check()
         peer.send(json.dumps({**first, 'target': target(spec)}))
         first['credentials'].clear()

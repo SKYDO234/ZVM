@@ -14,10 +14,15 @@ from services.webssh import SSHError, enabled, renew
 
 
 def browser_session(create=False):
-    value = session.get('webssh_session')
+    # Reuse the existing random, session-bound CSRF seed. Adding a new cookie
+    # field on the WebSSH GET races delayed dashboard/API cookie refreshes,
+    # which can overwrite that field and cause intermittent upgrade 403s.
+    # Retain bindings from previously opened terminals during rolling updates.
+    value = session.get('webssh_session') or session.get('csrf_token')
     if not value and create:
-        value = secrets.token_urlsafe(32)
-        session['webssh_session'] = value
+        from flask_wtf.csrf import generate_csrf
+        generate_csrf()
+        value = session.get('csrf_token')
     return hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None
 
 

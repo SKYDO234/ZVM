@@ -124,6 +124,9 @@ def socket(ws, ident):
         pass
     except EngineError as exc:
         webssh.error(ws, exc)
+    except SQLAlchemyError:
+        db.session.rollback()
+        webssh.error(ws, webssh.SSHError('service_unavailable', 'WebSSH storage or auditing is temporarily unavailable. Reconnect after the operator checks the service.'))
     except (ValueError, TypeError, KeyError):
         webssh.error(ws, webssh.SSHError('invalid_message', 'Invalid WebSSH connection message.'))
     finally:
