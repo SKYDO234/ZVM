@@ -1,0 +1,86 @@
+name: Equipped Linux acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Actual resource tests to run on disposable Linux runners
+        type: choice
+        options: [qemu, docker, both]
+        default: qemu
+      ubuntu_sha256:
+        description: Trusted SHA256 for the CURRENT Ubuntu 24.04 amd64 cloud image (required for qemu/both)
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: skvm-acceptance-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  cloud-os-boot:
+    if: inputs.target == 'qemu' || inputs.target == 'both'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      SKVM_RUN_OS_BOOT: '1'
+      SKVM_USE_KVM: '0'
+      SKVM_BOOT_IMAGE_SHA256: ${{ inputs.ubuntu_sha256 }}
+      SKVM_BOOT_REPORT_DIR: ${{ github.workspace }}/test-results/skvm-boot-evidence
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Require a vendor checksum, not an unpinned download
+        run: |
+          python - <<'PY'
+          import os, re
+          if not re.fullmatch(r'[0-9a-fA-F]{64}', os.environ['SKVM_BOOT_IMAGE_SHA256']):
+              raise SystemExit('Supply the SHA256 from the authenticated current Ubuntu 24.04 amd64 vendor checksum manifest.')
+          PY
+      - name: Install userspace tools (KVM is not required)
+        run: sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update && sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client
+      - run: pip install -r requirements.txt
+      - name: Check actual tools before acceptance (never a skipped success)
+        run: |
+          for binary in qemu-system-x86_64 qemu-img cloud-localds ssh ssh-keygen; do command -v "$binary"; done
+          python scripts/qemu-smoke-test.py
+      - name: Boot the pinned cloud OS, authenticate, grow and check persistence
+        run: python -m pytest tests/test_qemu_os_boot.py -q -rs --junitxml="$RUNNER_TEMP/qemu-os-boot.xml"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: qemu-os-boot-evidence
+          path: |
+            ${{ runner.temp }}/qemu-os-boot.xml
+            ${{ github.workspace }}/test-results/skvm-boot-evidence
+          retention-days: 7
+          if-no-files-found: warn
+  docker-lifecycle:
+    if: inputs.target == 'docker' || inputs.target == 'both'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      SKVM_RUN_DOCKER_INTEGRATION: '1'
+      SKVM_DOCKER_STORAGE_LIMITS: '0'
+      DOCKER_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Require the runner's already-accessible Unix daemon
+        run: |
+          test -S /var/run/docker.sock
+          docker version
+          docker info
+      - name: Exercise actual container limits, persistence and network lifecycle
+        run: python -m pytest tests/test_docker_integration.py -q -rs --junitxml="$RUNNER_TEMP/docker-lifecycle.xml"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: docker-lifecycle-evidence
+          path: ${{ runner.temp }}/docker-lifecycle.xml
+          retention-days: 7
+          if-no-files-found: warn

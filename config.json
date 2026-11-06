@@ -1,0 +1,26 @@
+{
+  "app_name": "SKVM",
+  "registration_enabled": true,
+  "qemu_enabled": true,
+  "docker_enabled": true,
+  "max_instances_per_user": 3,
+  "max_ram_mb_per_user": 4096,
+  "max_vcpus_per_user": 4,
+  "max_disk_gb_per_user": 60,
+  "max_instance_ram_mb": 2048,
+  "max_instance_vcpus": 2,
+  "max_instance_disk_gb": 40,
+  "host_memory_fraction": 0.75,
+  "host_storage_reserve_gb": 2,
+  "max_instances_per_node": 8,
+  "ssh_port_min": 22000,
+  "ssh_port_max": 22999,
+  "restrict_guest_network": true,
+  "image_max_download_gb": 3,
+  "image_hosts": [
+    "cloud-images.ubuntu.com", "cloud.debian.org", "cdimage.debian.org", "download.fedoraproject.org",
+    "archives.fedoraproject.org", "cloud.centos.org", "repo.almalinux.org",
+    "gemmei.ftp.acc.umu.se", "laotzu.ftp.acc.umu.se", "chuangtzu.ftp.acc.umu.se",
+    "download.rockylinux.org", "dl.rockylinux.org"
+  ]
+}

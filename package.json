@@ -1,0 +1,26 @@
+{
+  "name": "skvm-assets",
+  "version": "1.0.0",
+  "description": "Locally bundled SKVM frontend assets",
+  "scripts": {
+    "build:css": "tailwindcss -i static/css/tailwind-input.css -o static/css/tailwind.css --minify",
+    "test:ui": "playwright test",
+    "build:assets": "node scripts/build-assets.cjs && npm run build:css"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SKYDO234/ZVM.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SKYDO234/ZVM/issues"
+  },
+  "homepage": "https://github.com/SKYDO234/ZVM#readme",
+  "devDependencies": {
+    "@fontsource-variable/inter": "^5.1.1",
+    "@playwright/test": "^1.56.1",
+    "chart.js": "^4.4.7",
+    "lucide": "^0.468.0",
+    "tailwindcss": "^3.4.17"
+  },
+  "private": true
+}

@@ -1,0 +1,140 @@
+name: SKVM full checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+concurrency:
+  group: skvm-full-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements-dev.txt
+      - run: python -m ruff check --select F .
+      - run: python -m pytest --cov=engines --cov=services --cov=routes --cov=models --cov=skvm --cov-report=term-missing -q -rs --junitxml=backend.xml
+      - name: Publish readable backend diagnostics
+        if: always()
+        run: python scripts/report-ci.py junit backend.xml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: backend-${{ matrix.python }}
+          path: backend.xml
+          retention-days: 7
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+      - run: npm ci && npm run build:assets
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
+  qemu-userspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Run actual installer including fresh verified Node LTS on a disposable runner
+        env:
+          SKVM_INSTALL_NODE: '1'
+        run: |
+          export SKVM_DATABASE_URL="sqlite:///$RUNNER_TEMP/skvm-installer.db"
+          export SKVM_DATA_DIR="$RUNNER_TEMP/skvm-installer-data"
+          export SKVM_BOOTSTRAP_ACCEPTANCE=1
+          bash install.sh --no-start
+          trap '.venv/bin/python scripts/serve-panel.py --stop' EXIT
+          .venv/bin/python scripts/serve-panel.py --background
+          .venv/bin/python scripts/serve-panel.py --background
+          .venv/bin/python scripts/check-bootstrap.py
+      - run: .venv/bin/python scripts/qemu-smoke-test.py
+      - run: .venv/bin/python -m pytest tests/test_qemu_integration.py -q -rs
+  cloud-os-panel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      SKVM_RUN_OS_BOOT: '1'
+      SKVM_USE_KVM: '0'
+      SKVM_BOOT_REPORT_DIR: ${{ github.workspace }}/test-results/skvm-boot-evidence
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Userspace QEMU and trusted distribution cloud-image keys
+        run: sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update && sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client gpgv ubuntu-cloudimage-keyring
+      - run: pip install -r requirements-dev.txt
+      - name: Verify vendor signature before accepting a checksum
+        run: |
+          pin=$(python scripts/verified-ubuntu-checksum.py)
+          echo "SKVM_BOOT_IMAGE_SHA256=$pin" >> "$GITHUB_ENV"
+      - name: Live-check all catalog endpoints
+        id: catalog
+        continue-on-error: true
+        run: python scripts/check-image-catalog.py --report "$RUNNER_TEMP/image-catalog.json" --strict
+      - name: Publish all catalog verification results
+        if: always()
+        run: python scripts/report-ci.py catalog "$RUNNER_TEMP/image-catalog.json"
+      - name: Real panel confirmation, queued worker, cloud-init, SSH and lifecycle
+        run: python -m pytest tests/test_qemu_os_boot.py -q -rs --junitxml="$RUNNER_TEMP/qemu-panel.xml"
+      - name: Publish readable real-guest diagnostics
+        if: always()
+        run: python scripts/report-ci.py junit "$RUNNER_TEMP/qemu-panel.xml"
+      - name: Keep failed catalog verification a failing check
+        if: always() && steps.catalog.outcome == 'failure'
+        run: exit 1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: real-qemu-panel-evidence
+          path: |
+            ${{ runner.temp }}/qemu-panel.xml
+            ${{ runner.temp }}/image-catalog.json
+            ${{ github.workspace }}/test-results/skvm-boot-evidence
+          retention-days: 7
+          if-no-files-found: warn
+  docker-panel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SKVM_RUN_DOCKER_INTEGRATION: '1'
+      SKVM_DOCKER_STORAGE_LIMITS: '0'
+      DOCKER_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - name: Require the already-installed local daemon; never start privileged DinD
+        run: test -S /var/run/docker.sock && docker version && docker info
+      - name: Real panel confirmation, queued worker and enforced container limits
+        run: python -m pytest tests/test_docker_integration.py -q -rs --junitxml="$RUNNER_TEMP/docker-panel.xml"
+      - name: Publish readable native Docker diagnostics
+        if: always()
+        run: python scripts/report-ci.py junit "$RUNNER_TEMP/docker-panel.xml"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: real-docker-panel-evidence
+          path: ${{ runner.temp }}/docker-panel.xml
+          retention-days: 7
+          if-no-files-found: warn
