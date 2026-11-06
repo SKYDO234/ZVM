@@ -1,22 +1,22 @@
 # Test execution and compatibility report
 
-Date: **2026-11-06**. Pre-bootstrap/31120 baseline application source: **`56bb0a2`** on `arena/364e5d5e-zvm`. The new default-admin/root-installer/port-31120 update is separately validated below; these historical numbers must not be treated as its proof.
+Date: **2026-11-06**. Validated application source: **`aa1a15a2399d38200e1370e0bfd93eeaa9df74db`** on `arena/364e5d5e-zvm`. Documentation-only follow-ups do not change that application source.
 
-## Prior engine baseline results
+## Latest results
 
 | Check | Result and scope |
 |---|---|
-| Local backend/security/regressions | **166 passed, 4 skipped, 1 warning in 45.55 s** |
-| Local measured Python coverage | **71%** (3,009 statements); not a claim of exhaustive coverage |
-| Local Chromium desktop + Pixel 7 emulation | **8 passed in 49.9 s** |
-| Remote Python 3.11 and 3.12 | **166 passed, 4 skipped on each version**, source `56bb0a2` |
-| Actual Ubuntu 24.04 / TCG / cloud-init / SSH | **1 passed, 0 skipped** on `56bb0a2`, including the corrected bounded graceful-shutdown wait |
-| Actual Docker and panel → TLS agent → Docker | **2 passed, 0 skipped**, source `56bb0a2` |
-| All nine live image endpoints | **9 verified HTTPS QCOW2 endpoints** on `56bb0a2`, including the Fedora archive and Debian mirror redirects |
-| Actual documented installer + blank-disk QEMU | **Passed**, actual installer + native smoke/integration on `56bb0a2` |
-| Interactive administrator bootstrap | Passed in a disposable DB using a genuine terminal; hidden password, stored hash, no silent promotion, no guests |
+| Local backend/security/regressions | **196 passed, 4 skipped, 1 warning in 56.15 s**, including 30 new bootstrap/installer/launcher cases |
+| Local measured Python coverage | **72%** (3,082 statements); bootstrap service 100% statement coverage, not exhaustive compatibility proof |
+| Local Chromium desktop + Pixel 7 emulation | **10 passed in 54.8 s** |
+| Remote Python 3.11 and 3.12 | **196 passed, 4 native skips on each version**; 200 JUnit cases, no failures/errors |
+| Actual Ubuntu 24.04 / TCG / cloud-init / SSH | **1 passed, 0 skipped** on current source, including the full queued panel/SSH/lifecycle workflow |
+| Actual Docker and panel → TLS agent → Docker | **2 passed, 0 skipped**, current source |
+| All nine live image endpoints | **9 verified HTTPS QCOW2 endpoints**, including the Fedora archive and Debian redirects |
+| Actual root installer + fresh Node LTS + HTTP panel + blank-disk QEMU | **Passed**; system packages, SHA-256-verified Node 24, pip/npm/assets, schema/bootstrap, real Gunicorn 31120, password rotation/session invalidation/restart, native smoke/integration |
+| Full local installer repeat | **Passed**; existing configuration, account, rotated hash and flag preserved |
 
-**Baseline CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42203719685](https://github.com/SKYDO234/ZVM/actions/runs/42203719685), application commit `56bb0a256dc2b8789a6aa22359dc9fd419e4915c`. The real Ubuntu panel/SSH/lifecycle step ran from **10:35:58 to 10:49:17 UTC** and passed without skips. Earlier failures were fixed and rerun, not counted as successes. Documentation-only follow-ups use `[skip ci]` to avoid needlessly repeating the same long native execution; this baseline proof does not cover the subsequent login/installer changes.
+**Current-source CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42209561597](https://github.com/SKYDO234/ZVM/actions/runs/42209561597), application commit `aa1a15a2399d38200e1370e0bfd93eeaa9df74db`. This run covers the new default-admin/root-installer/port changes, not only the earlier engine baseline. The actual installer/HTTP step ran **11:20:55–11:30:15 UTC**; native smoke/integration also passed. The full Ubuntu job completed successfully in **13 min 50 s**. Documentation-only follow-ups use `[skip ci]` rather than repeating unchanged application/native tests.
 
 ## Default-admin and root-installer update
 
@@ -38,7 +38,7 @@ Local validation of this update:
 | Real Gunicorn / HTTP on 0.0.0.0:31120 | Passed; duplicate-start refusal, mandatory rotation, blocked APIs/guest mutation, admin unlock, revoked old sessions, restart preserves the new password, graceful stop |
 | Ruff / JS syntax / Bash syntax / original-reference hash | Passed |
 
-The four local native skips are honest: this sandbox still has no QEMU tools or Docker daemon. Fresh distro-package/Node-download/native-resource checks run in equipped CI; current remote results will be recorded once they finish. The baseline table above remains historical.
+The four local native skips are honest: this sandbox still has no QEMU tools or Docker daemon. Fresh distro-package/Node-download/native-resource checks **passed separately on equipped CI**, as shown above. A native CI pass does not pretend that these engines are available inside the supplied sandbox.
 
 ## What the automated checks exercise
 

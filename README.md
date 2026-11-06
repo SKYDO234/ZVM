@@ -4,7 +4,7 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
-**Engine baseline validated:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42203719685)—166 backend tests on each of Python 3.11/3.12, eight desktop/mobile browser tests, the actual installer, native QEMU/Ubuntu/cloud-init/SSH/lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. This run is the pre-bootstrap/port-change baseline; the new installer/login checks are tracked separately in [the execution report and scope limits](docs/testing.md).
+**Validated:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42209561597) on application source `aa1a15a`—196 backend tests on each of Python 3.11/3.12, ten desktop/mobile browser journeys, the root installer with fresh verified Node 24 LTS and real port-31120 login/rotation/restart checks, native QEMU/Ubuntu/SSH lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. See [the execution report and scope limits](docs/testing.md).
 
 ## The uploaded `n.txt` is the reference
 
