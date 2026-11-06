@@ -129,7 +129,13 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
                 if source.is_file():
                     with source.open('rb') as handle:
                         handle.seek(max(0,source.stat().st_size-65536))
-                        (target/filename).write_bytes(handle.read(65536))
+                        tail=handle.read(65536)
+                        (target/filename).write_bytes(tail)
+                        if os.getenv('GITHUB_ACTIONS')=='true' and not report['passed']:
+                            from importlib.util import spec_from_file_location,module_from_spec
+                            module_spec=spec_from_file_location('skvm_ci_reporter',Path(__file__).parents[1]/'scripts/report-ci.py')
+                            reporter=module_from_spec(module_spec);module_spec.loader.exec_module(reporter)
+                            reporter.annotation('notice','Real QEMU failure: '+filename,tail[-3000:].decode(errors='replace'))
             (target/'result.json').write_text(json.dumps(report,indent=2))
         # Explicit cleanup of ONLY this disposable test UUID; never a broad kill.
         if panel.ident:

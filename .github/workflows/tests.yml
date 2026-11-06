@@ -13,8 +13,8 @@ jobs:
       matrix:
         python: ['3.11', '3.12']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - run: pip install -r requirements-dev.txt
@@ -23,7 +23,7 @@ jobs:
       - name: Publish readable backend diagnostics
         if: always()
         run: python scripts/report-ci.py junit backend.xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: backend-${{ matrix.python }}
@@ -33,11 +33,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -49,8 +49,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage
@@ -65,8 +65,8 @@ jobs:
       SKVM_USE_KVM: '0'
       SKVM_BOOT_REPORT_DIR: ${{ github.workspace }}/test-results/skvm-boot-evidence
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Userspace QEMU and trusted distribution cloud-image keys
@@ -91,7 +91,7 @@ jobs:
       - name: Keep failed catalog verification a failing check
         if: always() && steps.catalog.outcome == 'failure'
         run: exit 1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: real-qemu-panel-evidence
@@ -109,8 +109,8 @@ jobs:
       SKVM_DOCKER_STORAGE_LIMITS: '0'
       DOCKER_HOST: unix:///var/run/docker.sock
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
@@ -121,7 +121,7 @@ jobs:
       - name: Publish readable native Docker diagnostics
         if: always()
         run: python scripts/report-ci.py junit "$RUNNER_TEMP/docker-panel.xml"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: real-docker-panel-evidence

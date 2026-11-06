@@ -20,6 +20,7 @@
   "image_hosts": [
     "cloud-images.ubuntu.com", "cloud.debian.org", "cdimage.debian.org", "download.fedoraproject.org",
     "archives.fedoraproject.org", "cloud.centos.org", "repo.almalinux.org",
+    "gemmei.ftp.acc.umu.se", "laotzu.ftp.acc.umu.se", "chuangtzu.ftp.acc.umu.se",
     "download.rockylinux.org", "dl.rockylinux.org"
   ]
 }

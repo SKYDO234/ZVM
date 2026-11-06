@@ -187,3 +187,25 @@ def test_real_docker_sdk_client_is_explicitly_closed_without_assumed_context_pro
         with pytest.raises(DockerException,match='mutation interruption'):consume()
     else:consume()
     client.close.assert_called_once()
+
+
+@pytest.mark.parametrize('state',['running','created'])
+def test_docker_metrics_use_supported_sdk_method_signatures_and_own_measured_size(app,monkeypatch,state):
+    import docker
+    from unittest.mock import create_autospec
+    data=vm_spec()|{'engine':'docker','runtime':{'container_id':'a'*64,'storage_enforced':False}}
+    client=docker.DockerClient(base_url='unix:///nonexistent-skvm-test.sock',version='1.44')
+    client.api.close()
+    client.api=create_autospec(docker.APIClient,instance=True)
+    client.api.inspect_container.return_value={'Id':'a'*64,'State':{'Status':state},
+        'Config':{'Labels':{'skvm.instance':data['id'],'skvm.owner':str(data['owner_id'])}}}
+    client.api.containers.return_value=[{'Id':'unrelated','SizeRw':999999},{'Id':'a'*64,'SizeRw':12345}]
+    client.api.stats.return_value={'memory_stats':{'usage':2**20,'stats':{}},'cpu_stats':{},'precpu_stats':{}}
+    monkeypatch.setattr('engines.docker_engine.docker.from_env',lambda **kwargs:client)
+    result=DockerEngine().metrics(data)
+    assert result['usage']['disk_actual_bytes']==12345 and result['storage_enforced'] is False
+    assert result['status']==('running' if state=='running' else 'stopped')
+    assert result['usage']['process_rss_mb']==(1.0 if state=='running' else 0)
+    client.api.inspect_container.assert_called_once_with('a'*64)
+    client.api.containers.assert_called_once_with(all=True,size=True,filters={'id':'a'*64})
+    client.api.close.assert_called_once()

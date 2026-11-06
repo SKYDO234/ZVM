@@ -231,8 +231,11 @@ class DockerEngine:
                 container = self._container(client, spec)
                 if not container:
                     return {'status': 'missing', 'usage': {}}
-                inspected = client.api.inspect_container(container.id, size=True)
-                usage = {'disk_actual_bytes': inspected.get('SizeRw'), 'process_rss_mb': 0, 'process_cpu_percent': 0}
+                # Public docker-py inspect_container() has NO size parameter.
+                # The filtered list endpoint supports size=True and exposes real SizeRw.
+                rows = client.api.containers(all=True, size=True, filters={'id': container.id})
+                measured = next((row for row in rows if row.get('Id') == container.id), {})
+                usage = {'disk_actual_bytes': measured.get('SizeRw'), 'process_rss_mb': 0, 'process_cpu_percent': 0}
                 if container.status == 'running':
                     stats = container.stats(stream=False, one_shot=True)
                     mem = stats.get('memory_stats', {})
