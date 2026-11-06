@@ -1,8 +1,8 @@
 # Test execution and compatibility report
 
-Date: **2026-11-06**. Validated application source: **`56bb0a2`** on `arena/364e5d5e-zvm`. Documentation-only follow-ups do not change that application source.
+Date: **2026-11-06**. Pre-bootstrap/31120 baseline application source: **`56bb0a2`** on `arena/364e5d5e-zvm`. The new default-admin/root-installer/port-31120 update is separately validated below; these historical numbers must not be treated as its proof.
 
-## Latest results
+## Prior engine baseline results
 
 | Check | Result and scope |
 |---|---|
@@ -16,7 +16,29 @@ Date: **2026-11-06**. Validated application source: **`56bb0a2`** on `arena/364e
 | Actual documented installer + blank-disk QEMU | **Passed**, actual installer + native smoke/integration on `56bb0a2` |
 | Interactive administrator bootstrap | Passed in a disposable DB using a genuine terminal; hidden password, stored hash, no silent promotion, no guests |
 
-**Final-source CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42203719685](https://github.com/SKYDO234/ZVM/actions/runs/42203719685), application commit `56bb0a256dc2b8789a6aa22359dc9fd419e4915c`. The real Ubuntu panel/SSH/lifecycle step ran from **10:35:58 to 10:49:17 UTC** and passed without skips. Earlier failures were fixed and rerun, not counted as successes. Documentation-only follow-ups use `[skip ci]` to avoid needlessly repeating the same long native execution; no application/test/workflow code changes after this validated revision are included in those follow-ups.
+**Baseline CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42203719685](https://github.com/SKYDO234/ZVM/actions/runs/42203719685), application commit `56bb0a256dc2b8789a6aa22359dc9fd419e4915c`. The real Ubuntu panel/SSH/lifecycle step ran from **10:35:58 to 10:49:17 UTC** and passed without skips. Earlier failures were fixed and rerun, not counted as successes. Documentation-only follow-ups use `[skip ci]` to avoid needlessly repeating the same long native execution; this baseline proof does not cover the subsequent login/installer changes.
+
+## Default-admin and root-installer update
+
+The current changes add a reserved username `admin` with first-run password `admin123`, a persistent one-time bootstrap marker, additive schema migration, mandatory password rotation, port **31120**, and the root `install.sh` (Node/Python/system prerequisites, asset build, initialization and real Gunicorn hosting). Existing accounts and secrets are preserved. Tests and agents never acquire an unintended default account.
+
+New regression checks cover empty/existing/deleted-account bootstrap, hash storage, schema migration/data preservation, opt-out, environment isolation, HTML username/mandatory-password fields, all panel/API/guest-mutation gates, failed password changes, admin unlock, session invalidation, safe PID handling and installer argument rejection. Desktop/mobile browser coverage adds the complete initial-password flow.
+
+The installer CI now explicitly downloads the official Node 24 LTS archive and verifies its SHA-256, builds assets, starts the real panel on 31120 twice to check idempotence, performs actual HTTP default-login/rotation/session checks against a disposable database, restarts Gunicorn to verify the password is not reset, and then runs the native blank-disk QEMU checks. `scripts/check-bootstrap.py` refuses the production database or a run without the explicit disposable-acceptance opt-in.
+
+Local validation of this update:
+
+| Check | Result |
+|---|---|
+| Backend/security/regressions, including 30 new cases | **196 passed, 4 native skips, 1 warning in 56.15 s** |
+| Measured Python coverage | **72%**, 3,082 statements; `services/bootstrap.py` 100% statement coverage |
+| Chromium desktop + Pixel 7 emulation | **10 passed in 54.8 s** |
+| Root installer with existing Python/Node (`--skip-system --no-start`) | Passed; actual pip/npm install, asset build, schema and one-time hashed administrator |
+| Full repeat of that installer | Passed; existing configuration/account/rotated hash/rotation flag preserved |
+| Real Gunicorn / HTTP on 0.0.0.0:31120 | Passed; duplicate-start refusal, mandatory rotation, blocked APIs/guest mutation, admin unlock, revoked old sessions, restart preserves the new password, graceful stop |
+| Ruff / JS syntax / Bash syntax / original-reference hash | Passed |
+
+The four local native skips are honest: this sandbox still has no QEMU tools or Docker daemon. Fresh distro-package/Node-download/native-resource checks run in equipped CI; current remote results will be recorded once they finish. The baseline table above remains historical.
 
 ## What the automated checks exercise
 
@@ -56,14 +78,15 @@ npx playwright install --with-deps chromium
 npm run test:ui
 ```
 
-Four journeys execute on both **1440 × 960 desktop Chromium** and **Pixel 7 Chromium emulation**:
+Five journeys execute on both **1440 × 960 desktop Chromium** and **Pixel 7 Chromium emulation**:
 
 1. Responsive landing, registration, actual empty dashboard/activity/chart samples and mobile navigation.
 2. Connected authenticated pages, live allocation form summary, Docker/QEMU field switching, honest test-mode provisioning refusal and ordinary-user admin denial.
 3. Admin node-form submission/rejection, plan creation/assignment, user disablement/login denial/re-enable, image checksum configuration, resource policy persistence, guarded deletion cancel/confirm and metrics authorization.
 4. Profile/password replacement, rejection of an old session, session revocation, confirmation dialog, mobile-menu logout and unauthenticated API rejection.
+5. Initial administrator username/password login, mandatory replacement UI, guarded routes/API/mutation checks, admin unlock and invalidation of another initial-password session.
 
-There are no seeded historical chart points or guests and no browser JavaScript exceptions. The test server uses **port 5558**, its own temporary database, private randomly generated fixture credentials and **real provisioning disabled**. These are browser/UI results, not native resource tests or physical-device certification.
+There are no seeded historical chart points or guests and no browser JavaScript exceptions. The test server uses **port 5558**, its own temporary database, private randomly generated fixture credentials plus explicit temporary first-login fixtures and **real provisioning disabled**. These are browser/UI results, not native resource tests or physical-device certification.
 
 The sandbox could not reach Playwright's normal browser-download host, so its local Chromium executable was extracted from an allowed npm package outside the repository. CI uses the ordinary Playwright installer. No browser binaries or credential artifacts are committed.
 
@@ -79,7 +102,7 @@ The native Docker suite additionally provisions a **real guest through this TLS 
 
 ### Installer and blank-disk QEMU
 
-The `qemu-userspace` CI job executes **the actual `scripts/install-codespaces.sh`**, then `scripts/qemu-smoke-test.py` and `tests/test_qemu_integration.py` with the installed virtual environment. Package network retries/timeouts are bounded. The smoke/integration steps fail if real tools are missing, even if the installer correctly fell back to panel-only mode.
+The `qemu-userspace` CI job executes **the root `install.sh --no-start`**, including a fresh checksum-verified Node runtime and actual HTTP server/password-rotation/restart checks, then `scripts/qemu-smoke-test.py` and `tests/test_qemu_integration.py` with the installed virtual environment. Package network retries/timeouts are bounded. The installer fails clearly on required installation errors; `--skip-system` is an explicit existing-runtime/panel-only choice. Native smoke/integration steps fail if real tools are missing.
 
 The integration verifies actual standalone QCOW2 creation, CIDATA seed, TCG process/QMP state, duplicate start rejection, explicit force stop, stopped disk growth and owned deletion. A running blank disk is **not** called an OS boot.
 
@@ -148,6 +171,6 @@ The push/PR workflow covers Python 3.11/3.12, browser, actual installer/blank QE
 - A fresh Codespaces devcontainer build and its actual long-running production deployment must still be checked in that Codespace. The Linux installer CI does not claim to be such a deployment.
 - No tests prove dedicated hardware performance, VM-grade Docker isolation, universal disk quotas, unlimited capacity, uptime or production hardening for hostile public multi-tenancy.
 
-Before real deployment: keep port 5555 Private; enable secure cookies for HTTPS; create your own administrator interactively; verify the selected engine and image from the provisioning host; check real serial/cloud-init/SSH readiness, not just QMP status; validate your node's TLS/proxy/socket/cgroup/storage arrangement; and back up SQLite, keys and stopped guest storage together.
+Before real deployment: keep port 31120 Private; enable secure cookies for HTTPS; replace the first-run admin password immediately (or opt out before startup and create your own administrator interactively); verify the selected engine and image from the provisioning host; check real serial/cloud-init/SSH readiness, not just QMP status; validate your node's TLS/proxy/socket/cgroup/storage arrangement; and back up SQLite, keys and stopped guest storage together.
 
-The live preview uses the actual application and preserved empty production database. No default administrator, public password, fake IP, fake guest or success metrics are inserted for the preview.
+The live preview uses the actual application and persistent database. A fresh empty panel receives only the requested initial admin account, with mandatory rotation; no fake IP, fake guest or success metrics are inserted.

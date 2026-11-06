@@ -4,7 +4,7 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
-**Validated:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42203719685)—166 backend tests on each of Python 3.11/3.12, eight desktop/mobile browser tests, the actual installer, native QEMU/Ubuntu/cloud-init/SSH/lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. See [the execution report and scope limits](docs/testing.md).
+**Engine baseline validated:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42203719685)—166 backend tests on each of Python 3.11/3.12, eight desktop/mobile browser tests, the actual installer, native QEMU/Ubuntu/cloud-init/SSH/lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. This run is the pre-bootstrap/port-change baseline; the new installer/login checks are tracked separately in [the execution report and scope limits](docs/testing.md).
 
 ## The uploaded `n.txt` is the reference
 
@@ -15,20 +15,35 @@ Read the [reference audit and feature mapping](docs/reference-audit.md), includi
 ## Quick start in GitHub Codespaces
 
 ```bash
-bash scripts/install-codespaces.sh
-python skvm.py
+bash install.sh
 ```
 
-1. Forward **5555** from the Codespaces **Ports** tab and open it in your browser. **Keep port visibility Private.** Both `devcontainer.json` and `.devcontainer/devcontainer.json` describe the environment and forwarding.
-2. Register an ordinary user in the UI, or create your administrator using the operator CLI below.
-3. Open **Settings** for the *actual* local engine capabilities. Missing QEMU tools or a Docker daemon are not hidden.
+The **root installer** installs Python/venv/build prerequisites, QEMU/cloud-init/SSH tools and Docker packages when no Docker CLI is present; reuses Node 22+ or installs **Node 24 LTS with HTTPS + SHA-256 verification**; installs Python/npm dependencies; builds the frontend; safely initializes SQLite; and starts the real **Gunicorn panel on `0.0.0.0:31120`**. It requires Debian/Ubuntu Linux and passwordless sudo for system packages. Installation failures are reported, not silently ignored.
+
+1. Open forwarded port **31120** from the Codespaces **Ports** tab. **Keep visibility Private.** The installer attempts to mark it Private using the existing Codespaces CLI; if that fails, check the Ports tab yourself. The devcontainer forwards 31120 and starts the installed panel on container startup.
+2. On a **new, empty panel**, sign in with **username `admin` / password `admin123`**. You must replace it in **Profile** with a private password of **12–128 characters** before any dashboard/admin/API/provisioning access. Passwords are stored as salted hashes. Reinstallation/restart **never resets the password or adds this account to an existing installation**.
+3. Open **Settings** for the *actual* local engine capabilities. Missing host permissions, a Docker daemon or QEMU are not hidden. Installing binaries does not grant a Codespace Docker/cgroup/KVM privileges.
 4. Configure an available engine, select **Create VPS**, review your configuration, and confirm. Watch its background job. A successful create leaves a **real stopped instance**; use **Start** to boot/run it.
 
-`python skvm.py` automatically uses `.venv/bin/python` if the installer created it. Node/npm are **not required at runtime**; Tailwind CSS, Inter, Lucide, and Chart.js are built and committed locally, without CDN dependencies.
+The default install stays in the foreground; leave the terminal open. Alternatively:
+
+```bash
+bash install.sh --background        # Install, then start without systemd
+bash install.sh --no-start          # Setup only (CI/devcontainer preparation)
+bash install.sh --skip-system      # Already have Python 3.11+, Node 22+ and npm
+bash install.sh --port 31120        # Explicit port override for this launch
+# After setup, start/stop just the managed panel:
+.venv/bin/python scripts/serve-panel.py --background
+.venv/bin/python scripts/serve-panel.py --stop
+```
+
+Background logs are `data/logs/panel.error.log` / `panel.access.log`; the master PID is `data/panel.pid` (or your configured data directory). Repeated starts do not duplicate the server; occupied ports or unproven PIDs are refused without killing unrelated processes. Background hosting lasts only while the Codespace runs. No systemd, privileged DinD, Docker-socket chmod or automatic daemon start is used. Existing accessible Docker daemons are reused.
+
+`python skvm.py` **still works** and automatically uses `.venv/bin/python`. Node/npm are build-time only; browser dependencies are bundled locally, without CDN requirements. A newly downloaded Node runtime lives in ignored `.local/node`; the installer reuses it (for manual npm work, add `.local/node/bin` to `PATH`). Legacy `scripts/install.sh` delegates to the root installer; `scripts/install-codespaces.sh` remains a setup-only compatibility wrapper.
 
 ### Installation without apt/sudo
 
-Python dependencies can be installed without root:
+If Python 3.11+, Node 22+ and npm already exist, use `bash install.sh --skip-system`. To run the bundled frontend with Python only:
 
 ```bash
 python3 -m venv .venv
@@ -36,26 +51,32 @@ python3 -m venv .venv
 python skvm.py
 ```
 
-Installing distro QEMU packages may require an operator or prebuilt devcontainer. The installer attempts `qemu-system-x86`, `qemu-utils`, `cloud-image-utils`, and `genisoimage` on Debian/Ubuntu, but does not silently pretend apt succeeded. The panel can run without these binaries; local QEMU remains unavailable and an external Linux node can be selected instead. It does not install or require a privileged Docker-in-Docker daemon.
+Install distro QEMU tools separately or select an external Linux node if the host cannot provide them. The panel reports the actual missing capability; it never substitutes a fake VM or Docker daemon.
 
 ### Configuration and database
 
-Copy `.env.example` to `.env` and edit it. Do not put credentials in Git.
+The installer creates `.env` only when absent and preserves existing configuration. For manual setup, copy `.env.example` to `.env` and edit it. Do not put credentials in Git.
 
 - Default database: **`database/skvm.db`**, automatically initialized on startup. Explicit initialization: `python skvm.py init-db`.
 - Guest disks, image cache, locks and private key files: **`data/`**, inside the checkout by default.
 - Static initial policy: `config.json`. Admin changes are stored in SQLite `Setting` rows and override those defaults.
-- Default port: **5555**, bound to **0.0.0.0**; no host/origin restriction blocks a forwarded preview.
+- Default port: **31120**, bound to **0.0.0.0**; no host/origin restriction blocks a forwarded preview.
 - Set `SKVM_COOKIE_SECURE=1` for HTTPS/Codespaces. Leave it `0` only for local HTTP development. The devcontainer sets `1`.
 - `SKVM_DATA_DIR` and `SKVM_DATABASE_URL` support operator-chosen persistent paths. Use a short path without commas/control characters: QEMU Unix socket paths have a length limit.
 - A session signing key is generated at startup; a separate Fernet encryption key is generated when encrypted review/job/node data is first needed, both with mode **0600**. `umask 077` protects newly created data. Back these keys up along with the database.
-- No debug mode, reloader, public default credentials, seeded users, or example VPS records.
+- Only the requested **first-run** admin account is initialized; no debug mode, reloader, fake users or example VPS records. A persistent bootstrap marker prevents re-creation even after that account is deleted.
 
-### Create an administrator
+### Optional: create your own administrator instead
+
+To disable the default account **before the first startup**, set `SKVM_BOOTSTRAP_ADMIN=0` in `.env` or the environment, then use:
 
 ```bash
+SKVM_BOOTSTRAP_ADMIN=0 bash install.sh --no-start
 python skvm.py create-admin --email you@example.com --name 'Your Name'
+python skvm.py
 ```
+
+Persist `SKVM_BOOTSTRAP_ADMIN=0` in `.env` for this opt-out. This flag prevents creation; it does not remove an account that already exists. `init-db` initializes schema/catalog only; `bootstrap-admin` explicitly performs the same one-time empty-database bootstrap used by the installer. External agents and ordinary isolated tests do not receive default accounts.
 
 The terminal prompts for a password twice without echoing it. Minimum length: 12 characters. Existing accounts are **not** silently promoted. New registrations always have the user role. Admin control can subsequently assign roles and plans, disable accounts, suspend guests, configure limits/images, and connect nodes. You cannot disable, demote or delete your current administrator through the UI. Account deletion requires its instances and active/uncertain jobs to be gone; old sessions are invalidated and audit history is retained. Session identities also bind to a randomly salted password hash so a reused SQLite numeric ID cannot inherit an old login.
 

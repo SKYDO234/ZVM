@@ -17,6 +17,7 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(16), default='user', nullable=False)
     enabled = db.Column(db.Boolean, default=True, nullable=False)
     session_version = db.Column(db.Integer, default=1, nullable=False)
+    must_change_password = db.Column(db.Boolean, default=False, server_default='0', nullable=False)
     plan_id = db.Column(db.Integer, db.ForeignKey('plan.id'))
     plan = db.relationship('Plan')
     created_at = db.Column(db.DateTime, default=utcnow, nullable=False)

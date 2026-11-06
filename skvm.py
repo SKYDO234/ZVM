@@ -54,8 +54,21 @@ def create_app(overrides=None):
         from services.security import locked
         with locked('schema-initialization'):
             db.create_all()
+            from services.bootstrap import migrate_user_schema
+            migrate_user_schema()
             from services.image_manager import seed_images
             seed_images()
+            enabled = app.config['BOOTSTRAP_ADMIN']
+            if app.testing or app.config['TEST_MODE']:
+                # .env must never populate isolated test databases unexpectedly.
+                enabled = (overrides or {}).get('BOOTSTRAP_ADMIN') is True
+            elif enabled is None:
+                enabled = True
+            if enabled and not app.config['NODE_AGENT']:
+                from services.bootstrap import bootstrap_admin
+                status = bootstrap_admin()
+                if status.startswith('created'):
+                    logging.warning('Bootstrap administrator %s. Keep port forwarding Private.', status)
 
     if app.config['NODE_AGENT']:
         if not re.fullmatch(r'[A-Za-z0-9_-]{32,256}', app.config.get('NODE_TOKEN') or ''):
@@ -67,6 +80,8 @@ def create_app(overrides=None):
         from routes import admin, api, auth, dashboard, vps
         for module in (auth, dashboard, vps, admin, api):
             app.register_blueprint(module.bp)
+        from services.bootstrap import require_password_change
+        app.before_request(require_password_change)
 
     @app.context_processor
     def context():
@@ -123,6 +138,7 @@ def cli():
     parser = argparse.ArgumentParser(description='SKVM virtualization control plane')
     sub = parser.add_subparsers(dest='command')
     sub.add_parser('init-db')
+    sub.add_parser('bootstrap-admin', help='Initialize the one-time default administrator on a new empty panel only.')
     admin = sub.add_parser('create-admin')
     admin.add_argument('--email', required=True)
     admin.add_argument('--name', default='Administrator')
@@ -137,10 +153,21 @@ def cli():
     resolve.add_argument('id')
     resolve.add_argument('--confirm-no-resource', action='store_true', required=True)
     args = parser.parse_args()
-    app = create_app({'START_WORKER': args.command is None and os.getenv('SKVM_START_WORKER', '1') == '1'})
+    overrides = {'START_WORKER': args.command is None and os.getenv('SKVM_START_WORKER', '1') == '1'}
+    if args.command:
+        overrides['BOOTSTRAP_ADMIN'] = False
+    app = create_app(overrides)
     with app.app_context():
         if args.command == 'init-db':
-            print('SQLite schema and OS catalog initialized. No users or instances were fabricated.')
+            print('SQLite schema and OS catalog initialized. Existing accounts and instances preserved.')
+        elif args.command == 'bootstrap-admin':
+            from services.bootstrap import bootstrap_admin
+            from services.security import locked
+            if os.getenv('SKVM_BOOTSTRAP_ADMIN', '1') == '0':
+                print('Default administrator bootstrap disabled by SKVM_BOOTSTRAP_ADMIN=0.')
+            else:
+                with locked('schema-initialization'):
+                    print('Bootstrap: ' + bootstrap_admin() + '.')
         elif args.command == 'create-admin':
             from routes.auth import valid_email
             from services.security import validate_password, audit
@@ -214,7 +241,7 @@ def cli():
         else:
             # For production use gunicorn (see README); debug/reloader are intentionally off.
             from werkzeug.serving import run_simple
-            run_simple(os.getenv('SKVM_HOST', '0.0.0.0'), int(os.getenv('SKVM_PORT', '5555')), app,
+            run_simple(os.getenv('SKVM_HOST', '0.0.0.0'), int(os.getenv('SKVM_PORT', '31120')), app,
                        use_reloader=False, use_debugger=False, threaded=True)
 
 

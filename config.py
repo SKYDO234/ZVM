@@ -50,6 +50,8 @@ def configuration():
         WTF_CSRF_TIME_LIMIT=7200,
         WTF_CSRF_SSL_STRICT=False,  # CSRF token still required; HTTPS is terminated by Codespaces.
         TEST_MODE=os.getenv('SKVM_TEST_MODE', '0') == '1',
+        # None means automatic for normal panels, off for isolated tests/test mode.
+        BOOTSTRAP_ADMIN=(None if 'SKVM_BOOTSTRAP_ADMIN' not in os.environ else os.environ['SKVM_BOOTSTRAP_ADMIN'] == '1'),
         USE_KVM=os.getenv('SKVM_USE_KVM', '0') == '1',
         ENABLE_QEMU=os.getenv('SKVM_ENABLE_QEMU', '1') == '1',
         ENABLE_DOCKER=os.getenv('SKVM_ENABLE_DOCKER', '1') == '1',

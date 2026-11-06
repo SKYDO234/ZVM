@@ -1,3 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
-exec bash "$(dirname "${BASH_SOURCE[0]}")/install-codespaces.sh" "$@"
+# Compatibility alias: root install.sh installs AND hosts the panel by default.
+set -Eeuo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+exec bash "$ROOT/install.sh" "$@"

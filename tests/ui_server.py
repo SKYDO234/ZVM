@@ -1,4 +1,4 @@
-"""Isolated browser-test app. No production DB, default credentials or real resources."""
+"""Temporary browser DB; intentional first-login fixtures, never production resources."""
 import json
 import os
 import secrets
@@ -15,12 +15,14 @@ with tempfile.TemporaryDirectory(prefix='skvm-browser-') as directory:
     root=Path(directory)
     app=create_app({'TEST_MODE':True,'DATA_DIR':root/'data','SQLALCHEMY_DATABASE_URI':f'sqlite:///{root/"skvm.db"}',
                     'SECRET_KEY':secrets.token_hex(48),'START_WORKER':False,'SESSION_COOKIE_SECURE':False})
-    credentials={'admin':None,'managed':{},'profile':{}}
+    credentials={'admin':None,'managed':{},'profile':{},'bootstrap':{}}
     with app.app_context():
-        for kind,project in [('admin',None),('managed','desktop'),('managed','android'),('profile','desktop'),('profile','android')]:
+        for kind,project in [('admin',None),('managed','desktop'),('managed','android'),('profile','desktop'),('profile','android'),('bootstrap','desktop'),('bootstrap','android')]:
             label=kind+('-'+project if project else '')
-            password=secrets.token_urlsafe(24)
-            user=User(name='Isolated '+label,email=label+'@example.test',role='admin' if kind=='admin' else 'user')
+            password='admin123' if kind=='bootstrap' else secrets.token_urlsafe(24)
+            email='admin' if kind=='bootstrap' and project=='desktop' else label+'@example.test'
+            user=User(name='Isolated '+label,email=email,role='admin' if kind in ('admin','bootstrap') else 'user',
+                      must_change_password=kind=='bootstrap')
             user.set_password(password);db.session.add(user);db.session.flush()
             account={'id':user.id,'email':user.email,'password':password}
             if project:credentials[kind][project]=account

@@ -32,3 +32,6 @@ test-results/
 .cache/
 coverage.xml
 backend.xml
+
+# Optional verified workspace-local Node runtime installed by install.sh.
+.local/

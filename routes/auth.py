@@ -81,7 +81,8 @@ def login():
         return redirect(url_for('dashboard.index'))
     if request.method == 'POST':
         try:
-            email = valid_email(request.form.get('email', ''))
+            identifier = request.form.get('email', '').strip().lower()
+            email = identifier if identifier == 'admin' else valid_email(identifier)
             rate_limit(email)
             user = db.session.scalar(db.select(User).where(User.email == email))
             password = request.form.get('password', '')[:129]
@@ -95,6 +96,9 @@ def login():
             session.permanent = True
             audit('auth.login', 'Signed in to your workspace.', user.id)
             db.session.commit()
+            if user.must_change_password:
+                flash('Replace the initial administrator password with a private password of at least 12 characters.', 'warning')
+                return redirect(url_for('auth.profile'))
             next_url = request.args.get('next', '')
             try:
                 target = urlsplit(next_url)
@@ -129,8 +133,11 @@ def profile():
             if not 2 <= len(name) <= 80:
                 raise EngineError('Name must be 2–80 characters.')
             current_user.name = name
+            if current_user.must_change_password and not request.form.get('new_password'):
+                raise EngineError('A new password of at least 12 characters is required before using the panel.')
             if request.form.get('new_password'):
                 current_user.set_password(validate_password(request.form['new_password']))
+                current_user.must_change_password = False
                 current_user.session_version += 1
                 login_user(current_user._get_current_object())
             audit('profile.updated', 'Profile updated. Password changes revoke other sessions.')

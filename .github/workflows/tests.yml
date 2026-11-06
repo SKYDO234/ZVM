@@ -53,8 +53,18 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Run the actual documented installer on a disposable runner
-        run: bash scripts/install-codespaces.sh
+      - name: Run actual installer including fresh verified Node LTS on a disposable runner
+        env:
+          SKVM_INSTALL_NODE: '1'
+        run: |
+          export SKVM_DATABASE_URL="sqlite:///$RUNNER_TEMP/skvm-installer.db"
+          export SKVM_DATA_DIR="$RUNNER_TEMP/skvm-installer-data"
+          export SKVM_BOOTSTRAP_ACCEPTANCE=1
+          bash install.sh --no-start
+          trap '.venv/bin/python scripts/serve-panel.py --stop' EXIT
+          .venv/bin/python scripts/serve-panel.py --background
+          .venv/bin/python scripts/serve-panel.py --background
+          .venv/bin/python scripts/check-bootstrap.py
       - run: .venv/bin/python scripts/qemu-smoke-test.py
       - run: .venv/bin/python -m pytest tests/test_qemu_integration.py -q -rs
   cloud-os-panel:

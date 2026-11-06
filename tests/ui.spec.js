@@ -102,3 +102,27 @@ test('profile, password replacement, session revocation and logout are connected
   await page.locator('form[action="/logout"]').getByRole('button').click();await page.waitForURL('http://127.0.0.1:5558/');
   expect((await page.request.get('/api/metrics')).status()).toBe(401);await otherContext.close();
 });
+
+test('initial administrator login requires password rotation before APIs and controls',async({page,browser},testInfo)=>{
+  const account=accounts().bootstrap[testInfo.project.name],errors=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/login');await page.locator('[name=email]').fill(account.email);await page.locator('[name=password]').fill(account.password);
+  await page.getByRole('button',{name:'Sign in to workspace'}).click();await page.waitForURL('**/profile');
+  await expect(page.getByRole('alert').filter({hasText:'Replace the public initial password'})).toBeVisible();
+  await expect(page.locator('[name=new_password]')).toHaveAttribute('required','');
+  await expect(page.locator('form[action="/sessions/revoke"]')).toHaveCount(0);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  const denied=await page.request.get('/api/metrics');expect(denied.status()).toBe(403);
+  expect((await denied.json()).code).toBe('password_change_required');
+  await page.goto('/admin');await expect(page).toHaveURL(/\/profile$/);
+  const otherContext=await browser.newContext(),other=await otherContext.newPage();
+  await other.goto('http://127.0.0.1:5558/login');await other.locator('[name=email]').fill(account.email);await other.locator('[name=password]').fill(account.password);
+  await other.getByRole('button',{name:'Sign in to workspace'}).click();await other.waitForURL('**/profile');
+  const form=page.locator('form').filter({has:page.locator('[name=current_password]')}),replacement=crypto.randomBytes(18).toString('hex');
+  await form.locator('[name=current_password]').fill(account.password);await form.locator('[name=new_password]').fill(replacement);
+  await form.getByRole('button',{name:/Save/}).click();await expect(page.locator('.toast-success')).toBeVisible();
+  await expect(page.getByRole('alert').filter({hasText:'Replace the public initial password'})).toHaveCount(0);
+  expect((await other.request.get('http://127.0.0.1:5558/api/metrics')).status()).toBe(401);
+  await page.goto('/admin');await expect(page.getByRole('heading',{name:'Admin control.'})).toBeVisible();
+  expect((await page.request.get('/api/metrics')).status()).toBe(200);expect(errors).toEqual([]);await otherContext.close();
+});
