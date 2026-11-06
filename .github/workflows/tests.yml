@@ -20,6 +20,9 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m ruff check --select F .
       - run: python -m pytest --cov=engines --cov=services --cov=routes --cov=models --cov=skvm --cov-report=term-missing -q -rs --junitxml=backend.xml
+      - name: Publish readable backend diagnostics
+        if: always()
+        run: python scripts/report-ci.py junit backend.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -74,9 +77,20 @@ jobs:
           pin=$(python scripts/verified-ubuntu-checksum.py)
           echo "SKVM_BOOT_IMAGE_SHA256=$pin" >> "$GITHUB_ENV"
       - name: Live-check all catalog endpoints
+        id: catalog
+        continue-on-error: true
         run: python scripts/check-image-catalog.py --report "$RUNNER_TEMP/image-catalog.json" --strict
+      - name: Publish all catalog verification results
+        if: always()
+        run: python scripts/report-ci.py catalog "$RUNNER_TEMP/image-catalog.json"
       - name: Real panel confirmation, queued worker, cloud-init, SSH and lifecycle
         run: python -m pytest tests/test_qemu_os_boot.py -q -rs --junitxml="$RUNNER_TEMP/qemu-panel.xml"
+      - name: Publish readable real-guest diagnostics
+        if: always()
+        run: python scripts/report-ci.py junit "$RUNNER_TEMP/qemu-panel.xml"
+      - name: Keep failed catalog verification a failing check
+        if: always() && steps.catalog.outcome == 'failure'
+        run: exit 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -104,6 +118,9 @@ jobs:
         run: test -S /var/run/docker.sock && docker version && docker info
       - name: Real panel confirmation, queued worker and enforced container limits
         run: python -m pytest tests/test_docker_integration.py -q -rs --junitxml="$RUNNER_TEMP/docker-panel.xml"
+      - name: Publish readable native Docker diagnostics
+        if: always()
+        run: python scripts/report-ci.py junit "$RUNNER_TEMP/docker-panel.xml"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
