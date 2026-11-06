@@ -103,26 +103,41 @@ test('profile, password replacement, session revocation and logout are connected
   expect((await page.request.get('/api/metrics')).status()).toBe(401);await otherContext.close();
 });
 
-test('initial administrator login requires password rotation before APIs and controls',async({page,browser},testInfo)=>{
+test('default administrator can navigate and use buttons before replacing the initial password',async({page,browser},testInfo)=>{
   const account=accounts().bootstrap[testInfo.project.name],errors=[];
   page.on('pageerror',error=>errors.push(error.message));
-  await page.goto('/login');await page.locator('[name=email]').fill(account.email);await page.locator('[name=password]').fill(account.password);
-  await page.getByRole('button',{name:'Sign in to workspace'}).click();await page.waitForURL('**/profile');
-  await expect(page.getByRole('alert').filter({hasText:'Replace the public initial password'})).toBeVisible();
-  await expect(page.locator('[name=new_password]')).toHaveAttribute('required','');
-  await expect(page.locator('form[action="/sessions/revoke"]')).toHaveCount(0);
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
-  const denied=await page.request.get('/api/metrics');expect(denied.status()).toBe(403);
-  expect((await denied.json()).code).toBe('password_change_required');
-  await page.goto('/admin');await expect(page).toHaveURL(/\/profile$/);
-  const otherContext=await browser.newContext(),other=await otherContext.newPage();
-  await other.goto('http://127.0.0.1:5558/login');await other.locator('[name=email]').fill(account.email);await other.locator('[name=password]').fill(account.password);
-  await other.getByRole('button',{name:'Sign in to workspace'}).click();await other.waitForURL('**/profile');
+  await signIn(page,account);
+  await expect(page.locator('[data-initial-password-reminder]')).toBeVisible();
+  const destinations=[['Create VPS','/vps/create'],['My VPS','/vps'],['Console','/vps/console'],
+    ['Profile','/profile'],['Settings','/settings'],['Admin control','/admin'],['Documentation','/docs'],['Overview','/dashboard']];
+  for(const [name,destination] of destinations){
+    if(testInfo.project.name==='android')await page.getByRole('button',{name:'Toggle navigation'}).click();
+    const response=page.waitForResponse(response=>new URL(response.url()).pathname===destination&&response.request().isNavigationRequest());
+    await page.locator('#sidebar').getByRole('link',{name,exact:false}).click();
+    expect((await response).status()).toBe(200);await expect(page).toHaveURL(new RegExp(destination+'$'));
+    await expect(page.locator('[data-initial-password-reminder]')).toBeVisible();
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  }
+  const metrics=await page.request.get('/api/metrics');expect(metrics.status()).toBe(200);
+  expect((await metrics.json()).totals.count).toBe(0);
+  const activity=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/activity');
+  await page.getByRole('button',{name:'Recent activity'}).click();expect((await activity).status()).toBe(200);
+  await expect(page.locator('#activity-drawer')).toBeVisible();await expect(page.locator('#activity-items')).not.toContainText('Loading');
+  await page.getByRole('button',{name:'Close activity'}).click();await expect(page.locator('#activity-drawer')).toBeHidden();
+  await page.goto('/admin');const planName='Initial admin plan '+testInfo.project.name,plan=page.locator('#plans form.plan-edit-row').last();
+  await plan.locator('[name=name]').fill(planName);
+  for(const [key,value] of Object.entries({max_instances:2,ram_mb:1024,vcpus:1,disk_gb:16}))await plan.locator(`[name=${key}]`).fill(String(value));
+  await plan.getByRole('button',{name:'Create',exact:true}).click();await expect(page.locator('.toast-success')).toBeVisible();
+  await expect(page.locator('#plans input[name=name][value="'+planName+'"]')).toBeVisible();
+  const otherContext=await browser.newContext(),other=await otherContext.newPage();await signIn(other,account);
+  await page.locator('[data-initial-password-reminder]').getByRole('link',{name:'change your password'}).click();
+  await expect(page).toHaveURL(/\/profile$/);await expect(page.locator('[name=new_password]')).not.toHaveAttribute('required');
+  await expect(page.locator('form[action="/sessions/revoke"]')).toBeVisible();
   const form=page.locator('form').filter({has:page.locator('[name=current_password]')}),replacement=crypto.randomBytes(18).toString('hex');
   await form.locator('[name=current_password]').fill(account.password);await form.locator('[name=new_password]').fill(replacement);
   await form.getByRole('button',{name:/Save/}).click();await expect(page.locator('.toast-success')).toBeVisible();
-  await expect(page.getByRole('alert').filter({hasText:'Replace the public initial password'})).toHaveCount(0);
+  await expect(page.locator('[data-initial-password-reminder]')).toHaveCount(0);
   expect((await other.request.get('http://127.0.0.1:5558/api/metrics')).status()).toBe(401);
-  await page.goto('/admin');await expect(page.getByRole('heading',{name:'Admin control.'})).toBeVisible();
+  await page.goto('/dashboard');await expect(page.locator('[data-initial-password-reminder]')).toHaveCount(0);
   expect((await page.request.get('/api/metrics')).status()).toBe(200);expect(errors).toEqual([]);await otherContext.close();
 });

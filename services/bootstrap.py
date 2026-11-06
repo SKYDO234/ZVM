@@ -1,6 +1,5 @@
 """One-time, explicitly documented bootstrap account; never a password back door."""
-from flask import current_app, jsonify, redirect, request, url_for
-from flask_login import current_user
+from flask import current_app
 from sqlalchemy import inspect, text
 from extensions import db
 from models import Setting, User
@@ -36,18 +35,6 @@ def bootstrap_admin():
     db.session.add(user)
     db.session.flush()
     db.session.add(Setting(key=BOOTSTRAP_MARKER, value={'state': 'created', 'user_id': user.id}))
-    audit('admin.bootstrap', 'One-time bootstrap administrator created; password replacement required before panel access.', user.id)
+    audit('admin.bootstrap', 'One-time bootstrap administrator created; initial-password reminder enabled.', user.id)
     db.session.commit()
-    return 'created; sign in as admin and replace the initial password before using the panel'
-
-
-def require_password_change():
-    """No admin page, API or guest mutation is usable with the initial password."""
-    if not current_user.is_authenticated or not current_user.must_change_password:
-        return None
-    if request.endpoint in ('auth.profile', 'auth.logout', 'static'):
-        return None
-    if request.path.startswith('/api/'):
-        return jsonify(error='Replace the initial administrator password before using the panel.',
-                       code='password_change_required', redirect=url_for('auth.profile')), 403
-    return redirect(url_for('auth.profile'))
+    return 'created; sign in as admin, then replace the initial password in Profile'

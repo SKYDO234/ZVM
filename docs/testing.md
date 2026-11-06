@@ -1,8 +1,23 @@
 # Test execution and compatibility report
 
+## Navigation-loop regression fix
+
+The previous initial-password guard caused the reported one-page symptom: every authenticated navigation route returned `302 /profile` and `/api/metrics` / `/api/activity` returned `403 password_change_required`. The new behavior opens Overview after login (or the validated local `next` destination), removes that global redirect/API lock, and keeps a persistent password-change reminder instead. The existing rotation flag remains in SQLite as a reminder flag, so existing accounts, sessions, passwords, data and schema are preserved.
+
+Validation of the fix:
+
+- **205 backend tests passed, 4 native tests skipped, 1 warning, 63.08 seconds** locally; **72%** measured Python coverage (3,068 statements), bootstrap service 100% statement coverage.
+- **10 Chromium desktop/Pixel 7 emulation journeys passed**. The default-admin regression now physically clicks all eight sidebar destinations before changing the password, checks each navigation response is 200, verifies metrics/recent-activity APIs, opens/closes the activity drawer, creates a plan through the real admin form, follows the password reminder, changes the password and verifies old-session rejection/reminder removal.
+- Backend regression covers existing reminder-flag accounts, safe post-login redirects, all authenticated pages/APIs, actual form validation/persistence, saving a profile without a password change, session revocation, retained CSRF and administrator role checks, and password replacement/restart persistence.
+- No VM was fabricated. Native guest tests still require an equipped host. The earlier full-native baseline below does **not** by itself validate this policy/UI change; fresh CI is run for the updated source.
+
+The disposable HTTP bootstrap acceptance script **passed against real Gunicorn on 0.0.0.0:31120**, including duplicate-start handling, all eight routes/APIs/admin form before password replacement, password replacement, revoked sessions, server restart, preserved new password and graceful stop. It no longer asserts that every page is locked. No production account was changed; this used a separate temporary database.
+
+## Previous full-source baseline (before the navigation fix)
+
 Date: **2026-11-06**. Validated application source: **`aa1a15a2399d38200e1370e0bfd93eeaa9df74db`** on `arena/364e5d5e-zvm`. Documentation-only follow-ups do not change that application source.
 
-## Latest results
+### Baseline results
 
 | Check | Result and scope |
 |---|---|
@@ -16,15 +31,15 @@ Date: **2026-11-06**. Validated application source: **`aa1a15a2399d38200e1370e0b
 | Actual root installer + fresh Node LTS + HTTP panel + blank-disk QEMU | **Passed**; system packages, SHA-256-verified Node 24, pip/npm/assets, schema/bootstrap, real Gunicorn 31120, password rotation/session invalidation/restart, native smoke/integration |
 | Full local installer repeat | **Passed**; existing configuration, account, rotated hash and flag preserved |
 
-**Current-source CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42209561597](https://github.com/SKYDO234/ZVM/actions/runs/42209561597), application commit `aa1a15a2399d38200e1370e0bfd93eeaa9df74db`. This run covers the new default-admin/root-installer/port changes, not only the earlier engine baseline. The actual installer/HTTP step ran **11:20:55–11:30:15 UTC**; native smoke/integration also passed. The full Ubuntu job completed successfully in **13 min 50 s**. Documentation-only follow-ups use `[skip ci]` rather than repeating unchanged application/native tests.
+**Baseline CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42209561597](https://github.com/SKYDO234/ZVM/actions/runs/42209561597), application commit `aa1a15a2399d38200e1370e0bfd93eeaa9df74db`. This run covers the new default-admin/root-installer/port changes, not only the earlier engine baseline. The actual installer/HTTP step ran **11:20:55–11:30:15 UTC**; native smoke/integration also passed. The full Ubuntu job completed successfully in **13 min 50 s**. Documentation-only follow-ups use `[skip ci]` rather than repeating unchanged application/native tests.
 
 ## Default-admin and root-installer update
 
-The current changes add a reserved username `admin` with first-run password `admin123`, a persistent one-time bootstrap marker, additive schema migration, mandatory password rotation, port **31120**, and the root `install.sh` (Node/Python/system prerequisites, asset build, initialization and real Gunicorn hosting). Existing accounts and secrets are preserved. Tests and agents never acquire an unintended default account.
+The prior bootstrap update added a reserved username `admin` with first-run password `admin123`, a persistent one-time bootstrap marker, additive schema migration, mandatory password rotation, port **31120**, and the root `install.sh` (Node/Python/system prerequisites, asset build, initialization and real Gunicorn hosting). Existing accounts and secrets are preserved. Tests and agents never acquire an unintended default account.
 
 New regression checks cover empty/existing/deleted-account bootstrap, hash storage, schema migration/data preservation, opt-out, environment isolation, HTML username/mandatory-password fields, all panel/API/guest-mutation gates, failed password changes, admin unlock, session invalidation, safe PID handling and installer argument rejection. Desktop/mobile browser coverage adds the complete initial-password flow.
 
-The installer CI now explicitly downloads the official Node 24 LTS archive and verifies its SHA-256, builds assets, starts the real panel on 31120 twice to check idempotence, performs actual HTTP default-login/rotation/session checks against a disposable database, restarts Gunicorn to verify the password is not reset, and then runs the native blank-disk QEMU checks. `scripts/check-bootstrap.py` refuses the production database or a run without the explicit disposable-acceptance opt-in.
+The installer CI explicitly downloads the official Node 24 LTS archive and verifies its SHA-256, builds assets, starts the real panel on 31120 twice to check idempotence, performs actual HTTP default-login/rotation/session checks against a disposable database, restarts Gunicorn to verify the password is not reset, and then runs the native blank-disk QEMU checks. `scripts/check-bootstrap.py` refuses the production database or a run without the explicit disposable-acceptance opt-in.
 
 Local validation of this update:
 
@@ -84,7 +99,7 @@ Five journeys execute on both **1440 × 960 desktop Chromium** and **Pixel 7 Chr
 2. Connected authenticated pages, live allocation form summary, Docker/QEMU field switching, honest test-mode provisioning refusal and ordinary-user admin denial.
 3. Admin node-form submission/rejection, plan creation/assignment, user disablement/login denial/re-enable, image checksum configuration, resource policy persistence, guarded deletion cancel/confirm and metrics authorization.
 4. Profile/password replacement, rejection of an old session, session revocation, confirmation dialog, mobile-menu logout and unauthenticated API rejection.
-5. Initial administrator username/password login, mandatory replacement UI, guarded routes/API/mutation checks, admin unlock and invalidation of another initial-password session.
+5. Initial administrator username/password login, actual clicks through every sidebar route, working APIs/activity drawer/admin form before password replacement, persistent reminder, optional password replacement and invalidation of another session.
 
 There are no seeded historical chart points or guests and no browser JavaScript exceptions. The test server uses **port 5558**, its own temporary database, private randomly generated fixture credentials plus explicit temporary first-login fixtures and **real provisioning disabled**. These are browser/UI results, not native resource tests or physical-device certification.
 
@@ -173,4 +188,4 @@ The push/PR workflow covers Python 3.11/3.12, browser, actual installer/blank QE
 
 Before real deployment: keep port 31120 Private; enable secure cookies for HTTPS; replace the first-run admin password immediately (or opt out before startup and create your own administrator interactively); verify the selected engine and image from the provisioning host; check real serial/cloud-init/SSH readiness, not just QMP status; validate your node's TLS/proxy/socket/cgroup/storage arrangement; and back up SQLite, keys and stopped guest storage together.
 
-The live preview uses the actual application and persistent database. A fresh empty panel receives only the requested initial admin account, with mandatory rotation; no fake IP, fake guest or success metrics are inserted.
+The live preview uses the actual application and persistent database. A fresh empty panel receives only the requested initial admin account, with a non-blocking password-change reminder; no fake IP, fake guest or success metrics are inserted.

@@ -4,7 +4,7 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
-**Validated:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42209561597) on application source `aa1a15a`—196 backend tests on each of Python 3.11/3.12, ten desktop/mobile browser journeys, the root installer with fresh verified Node 24 LTS and real port-31120 login/rotation/restart checks, native QEMU/Ubuntu/SSH lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. See [the execution report and scope limits](docs/testing.md).
+**Previously validated baseline:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42209561597) on application source `aa1a15a`—196 backend tests on each of Python 3.11/3.12, ten desktop/mobile browser journeys, the root installer with fresh verified Node 24 LTS and real port-31120 login/rotation/restart checks, native QEMU/Ubuntu/SSH lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. See [the execution report and scope limits](docs/testing.md).
 
 ## The uploaded `n.txt` is the reference
 
@@ -21,7 +21,7 @@ bash install.sh
 The **root installer** installs Python/venv/build prerequisites, QEMU/cloud-init/SSH tools and Docker packages when no Docker CLI is present; reuses Node 22+ or installs **Node 24 LTS with HTTPS + SHA-256 verification**; installs Python/npm dependencies; builds the frontend; safely initializes SQLite; and starts the real **Gunicorn panel on `0.0.0.0:31120`**. It requires Debian/Ubuntu Linux and passwordless sudo for system packages. Installation failures are reported, not silently ignored.
 
 1. Open forwarded port **31120** from the Codespaces **Ports** tab. **Keep visibility Private.** The installer attempts to mark it Private using the existing Codespaces CLI; if that fails, check the Ports tab yourself. The devcontainer forwards 31120 and starts the installed panel on container startup.
-2. On a **new, empty panel**, sign in with **username `admin` / password `admin123`**. You must replace it in **Profile** with a private password of **12–128 characters** before any dashboard/admin/API/provisioning access. Passwords are stored as salted hashes. Reinstallation/restart **never resets the password or adds this account to an existing installation**.
+2. On a **new, empty panel**, sign in with **username `admin` / password `admin123`**. Login opens **Overview** immediately and all pages/buttons remain available under normal authorization. A persistent, non-blocking reminder asks you to replace the initial password in **Profile** with a private password of **12–128 characters**. Passwords are stored as salted hashes. Reinstallation/restart **never resets the password or adds this account to an existing installation**.
 3. Open **Settings** for the *actual* local engine capabilities. Missing host permissions, a Docker daemon or QEMU are not hidden. Installing binaries does not grant a Codespace Docker/cgroup/KVM privileges.
 4. Configure an available engine, select **Create VPS**, review your configuration, and confirm. Watch its background job. A successful create leaves a **real stopped instance**; use **Start** to boot/run it.
 
@@ -40,6 +40,19 @@ bash install.sh --port 31120        # Explicit port override for this launch
 Background logs are `data/logs/panel.error.log` / `panel.access.log`; the master PID is `data/panel.pid` (or your configured data directory). Repeated starts do not duplicate the server; occupied ports or unproven PIDs are refused without killing unrelated processes. Background hosting lasts only while the Codespace runs. No systemd, privileged DinD, Docker-socket chmod or automatic daemon start is used. Existing accessible Docker daemons are reused.
 
 `python skvm.py` **still works** and automatically uses `.venv/bin/python`. Node/npm are build-time only; browser dependencies are bundled locally, without CDN requirements. A newly downloaded Node runtime lives in ignored `.local/node`; the installer reuses it (for manual npm work, add `.local/node/bin` to `PATH`). Legacy `scripts/install.sh` delegates to the root installer; `scripts/install-codespaces.sh` remains a setup-only compatibility wrapper.
+
+### Existing installation stuck on one page
+
+The old first-login guard redirected every link back to Profile and returned `403 password_change_required` from APIs. That guard has been removed: the initial administrator can navigate normally, use activity/metrics and submit authorized forms without a forced password-change loop. The initial-password reminder stays visible until a new password is saved. Authentication, CSRF, role/ownership checks and session invalidation remain enforced.
+
+After updating to this revision, restart the managed panel (no reinstall, database deletion or password reset is needed):
+
+```bash
+.venv/bin/python scripts/serve-panel.py --stop
+.venv/bin/python scripts/serve-panel.py --background
+```
+
+If you launched `python skvm.py` directly, stop that terminal process with Ctrl+C and run `python skvm.py` again. Keep port **31120 Private** and replace the known initial password as soon as possible.
 
 ### Installation without apt/sudo
 

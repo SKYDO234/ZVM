@@ -97,8 +97,7 @@ def login():
             audit('auth.login', 'Signed in to your workspace.', user.id)
             db.session.commit()
             if user.must_change_password:
-                flash('Replace the initial administrator password with a private password of at least 12 characters.', 'warning')
-                return redirect(url_for('auth.profile'))
+                flash('Welcome. Change the initial administrator password in Profile and keep the forwarded port Private.', 'warning')
             next_url = request.args.get('next', '')
             try:
                 target = urlsplit(next_url)
@@ -133,8 +132,6 @@ def profile():
             if not 2 <= len(name) <= 80:
                 raise EngineError('Name must be 2–80 characters.')
             current_user.name = name
-            if current_user.must_change_password and not request.form.get('new_password'):
-                raise EngineError('A new password of at least 12 characters is required before using the panel.')
             if request.form.get('new_password'):
                 current_user.set_password(validate_password(request.form['new_password']))
                 current_user.must_change_password = False

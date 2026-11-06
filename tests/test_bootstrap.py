@@ -1,8 +1,8 @@
-"""One-time requested initial login, additive migration and mandatory rotation."""
+"""One-time initial login, non-blocking navigation and secure password replacement."""
 import pytest
 from sqlalchemy import inspect, text
 from extensions import db
-from models import Audit, Setting, User, VPS
+from models import Audit, Job, Plan, Setting, User, VPS
 from services.bootstrap import BOOTSTRAP_MARKER, bootstrap_admin, migrate_user_schema
 from skvm import create_app
 from tests.conftest import csrf_token, post
@@ -13,7 +13,7 @@ def initial_login(client, password='admin123'):
     return client.post('/login', data={'email': 'admin', 'password': password, 'csrf_token': csrf_token(client)})
 
 
-def test_bootstrap_hashes_password_requires_rotation_and_seeds_only_once(app):
+def test_bootstrap_hashes_password_keeps_reminder_and_seeds_only_once(app):
     assert db.session.scalar(db.select(db.func.count(User.id))) == 0
     assert bootstrap_admin().startswith('created')
     user = db.session.scalar(db.select(User).where(User.email == 'admin'))
@@ -100,57 +100,116 @@ def test_node_agents_never_receive_a_default_account(tmp_path):
         db.engine.dispose()
 
 
-def test_initial_login_accepts_reserved_username_and_redirects_to_profile(app, client):
+def test_initial_login_opens_dashboard_and_shows_nonblocking_reminder(app, client):
     bootstrap_admin()
     root = parsed(client.get('/login'))
     field = next(node for node in root.iter('input') if node.get('name') == 'email')
     assert field.get('type') == 'text' and field.get('autocomplete') == 'username'
     response = initial_login(client)
-    assert response.status_code == 302 and response.location.endswith('/profile')
+    assert response.status_code == 302 and response.location.endswith('/dashboard')
+    dashboard = parsed(client.get('/dashboard'))
+    assert any('data-initial-password-reminder' in node.attrib for node in dashboard.iter('div'))
     profile = parsed(client.get('/profile'))
-    assert 'Replace the public initial password' in ''.join(profile.itertext())
     new_password = next(node for node in profile.iter('input') if node.get('name') == 'new_password')
-    assert new_password.get('required') is not None
-    assert not any(form.get('action') == '/sessions/revoke' for form in profile.iter('form'))
+    assert new_password.get('required') is None
+    assert any(form.get('action') == '/sessions/revoke' for form in profile.iter('form'))
 
 
-@pytest.mark.parametrize('path', ['/dashboard', '/admin', '/settings', '/vps', '/vps/create', '/docs'])
-def test_initial_password_cannot_access_panel_routes(app, client, path):
+@pytest.mark.parametrize('path', ['/dashboard', '/admin', '/settings', '/vps', '/vps/create', '/vps/console', '/profile', '/docs'])
+def test_initial_password_can_navigate_all_panel_routes(app, client, path):
     bootstrap_admin()
     initial_login(client)
     response = client.get(path)
-    assert response.status_code == 302 and response.location.endswith('/profile')
+    assert response.status_code == 200
+    assert b'data-initial-password-reminder' in response.data
 
 
-def test_initial_password_cannot_access_api_or_mutate_guests(app, client):
+@pytest.mark.parametrize('target,expected', [('/settings', '/settings'), ('/vps', '/vps'),
+                                            ('//evil.example', '/dashboard'), ('https://evil.example', '/dashboard')])
+def test_initial_admin_respects_only_safe_post_login_destinations(app, client, target, expected):
+    bootstrap_admin()
+    response = client.post('/login', query_string={'next': target}, data={
+        'email': 'admin', 'password': 'admin123', 'csrf_token': csrf_token(client)})
+    assert response.status_code == 302 and response.location == expected
+
+
+def test_initial_password_can_use_api_and_forms_without_fabricating_guests(app, client):
     bootstrap_admin()
     initial_login(client)
     response = client.get('/api/metrics')
-    assert response.status_code == 403 and response.json['code'] == 'password_change_required'
-    response = post(client, '/vps/create', {'name': 'blocked'}, token_path='/profile')
-    assert response.status_code == 302 and response.location.endswith('/profile')
+    assert response.status_code == 200 and response.json['totals']['count'] == 0
+    response = client.get('/api/activity')
+    assert response.status_code == 200 and isinstance(response.json, list)
+    # Invalid creation reaches real validation instead of bouncing to Profile.
+    response = post(client, '/vps/create', {'name': 'invalid-without-engine'}, token_path='/vps/create')
+    assert response.status_code == 200 and b'Create' in response.data
     assert db.session.scalar(db.select(db.func.count(VPS.id))) == 0
+    assert db.session.scalar(db.select(db.func.count(Job.id))) == 0
+    response = post(client, '/admin/plans', {'name': 'Initial admin plan', 'max_instances': '2',
+                    'ram_mb': '1024', 'vcpus': '1', 'disk_gb': '16'}, token_path='/admin')
+    assert response.status_code == 302 and response.location.endswith('/admin#plans')
+    assert db.session.scalar(db.select(Plan).where(Plan.name == 'Initial admin plan')) is not None
     assert client.get('/static/js/app.js').status_code == 200
     assert post(client, '/logout', token_path='/profile').status_code == 302
     assert client.get('/api/metrics').status_code == 401
 
 
-@pytest.mark.parametrize('current,new', [('admin123', ''), ('admin123', 'Too-short'), ('wrong-password', 'Private-password-2026!')])
-def test_rotation_requires_current_password_and_valid_strong_replacement(app, client, current, new):
+def test_initial_password_does_not_bypass_csrf(app, client):
+    bootstrap_admin()
+    initial_login(client)
+    assert client.post('/admin/plans', data={'name': 'Must not be saved'}).status_code == 400
+    assert db.session.scalar(db.select(Plan).where(Plan.name == 'Must not be saved')) is None
+
+
+def test_initial_password_flag_does_not_grant_an_ordinary_user_admin_access(app, client, users):
+    from tests.conftest import signin
+    users[0].must_change_password = True
+    db.session.commit()
+    signin(client)
+    assert client.get('/dashboard').status_code == 200
+    assert client.get('/admin').status_code == 403
+    assert post(client, '/admin/plans', {'name': 'Escalation'}, token_path='/profile').status_code == 403
+
+
+def test_profile_can_be_saved_without_changing_password_and_keeps_reminder(app, client):
+    bootstrap_admin()
+    initial_login(client)
+    response = post(client, '/profile', {'name': 'Panel Owner', 'current_password': 'admin123', 'new_password': ''}, token_path='/profile')
+    assert response.status_code == 302
+    user = db.session.scalar(db.select(User).where(User.email == 'admin'))
+    assert user.name == 'Panel Owner' and user.must_change_password and user.check_password('admin123')
+    assert b'data-initial-password-reminder' in client.get('/dashboard').data
+
+
+@pytest.mark.parametrize('current,new', [('admin123', 'Too-short'), ('wrong-password', 'Private-password-2026!')])
+def test_password_replacement_requires_current_password_and_strong_replacement(app, client, current, new):
     bootstrap_admin()
     initial_login(client)
     response = post(client, '/profile', {'name': 'Changed', 'current_password': current, 'new_password': new}, token_path='/profile')
     assert response.status_code == 200
     user = db.session.scalar(db.select(User).where(User.email == 'admin'))
     assert user.must_change_password and user.name == 'Administrator' and user.check_password('admin123')
-    assert client.get('/api/metrics').status_code == 403
+    assert client.get('/api/metrics').status_code == 200
 
 
-def test_rotation_unlocks_admin_invalidates_old_sessions_and_does_not_reset(app, client):
+def test_initial_password_can_revoke_other_sessions_without_navigation_lock(app, client):
     bootstrap_admin()
     other = app.test_client()
     initial_login(client)
     initial_login(other)
+    response = post(client, '/sessions/revoke', {'password': 'admin123'}, token_path='/profile')
+    assert response.status_code == 302
+    assert client.get('/dashboard').status_code == 200
+    assert other.get('/api/metrics').status_code == 401
+    assert db.session.scalar(db.select(User).where(User.email == 'admin')).must_change_password
+
+
+def test_replacement_removes_reminder_invalidates_old_sessions_and_does_not_reset(app, client):
+    bootstrap_admin()
+    other = app.test_client()
+    initial_login(client)
+    initial_login(other)
+    assert other.get('/api/metrics').status_code == 200
     password = 'Private-rotated-password-2026!'
     response = post(client, '/profile', {'name': 'Panel Owner', 'current_password': 'admin123', 'new_password': password}, token_path='/profile')
     assert response.status_code == 302
@@ -158,6 +217,7 @@ def test_rotation_unlocks_admin_invalidates_old_sessions_and_does_not_reset(app,
     assert user.is_admin and not user.must_change_password and user.check_password(password)
     assert user.session_version == 2 and not user.check_password('admin123')
     assert client.get('/admin').status_code == 200
+    assert b'data-initial-password-reminder' not in client.get('/dashboard').data
     assert client.get('/api/metrics').status_code == 200
     assert other.get('/api/metrics').status_code == 401
     assert bootstrap_admin().startswith('already initialized')
