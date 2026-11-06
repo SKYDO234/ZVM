@@ -1,0 +1,113 @@
+name: SKVM full checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+concurrency:
+  group: skvm-full-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements-dev.txt
+      - run: python -m ruff check --select F .
+      - run: python -m pytest --cov=engines --cov=services --cov=routes --cov=models --cov=skvm --cov-report=term-missing -q -rs --junitxml=backend.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-${{ matrix.python }}
+          path: backend.xml
+          retention-days: 7
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+      - run: npm ci && npm run build:assets
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
+  qemu-userspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage
+      - run: pip install -r requirements-dev.txt
+      - run: python scripts/qemu-smoke-test.py
+      - run: python -m pytest tests/test_qemu_integration.py -q -rs
+  cloud-os-panel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      SKVM_RUN_OS_BOOT: '1'
+      SKVM_USE_KVM: '0'
+      SKVM_BOOT_REPORT_DIR: ${{ runner.temp }}/skvm-boot-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Userspace QEMU and trusted distribution cloud-image keys
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client gpgv ubuntu-cloudimage-keyring
+      - run: pip install -r requirements-dev.txt
+      - name: Verify vendor signature before accepting a checksum
+        run: |
+          pin=$(python scripts/verified-ubuntu-checksum.py)
+          echo "SKVM_BOOT_IMAGE_SHA256=$pin" >> "$GITHUB_ENV"
+      - name: Live-check all catalog endpoints
+        run: python scripts/check-image-catalog.py --report "$RUNNER_TEMP/image-catalog.json" --strict
+      - name: Real panel confirmation, queued worker, cloud-init, SSH and lifecycle
+        run: python -m pytest tests/test_qemu_os_boot.py -q -rs --junitxml="$RUNNER_TEMP/qemu-panel.xml"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-qemu-panel-evidence
+          path: |
+            ${{ runner.temp }}/qemu-panel.xml
+            ${{ runner.temp }}/image-catalog.json
+            ${{ runner.temp }}/skvm-boot-evidence
+          retention-days: 7
+          if-no-files-found: warn
+  docker-panel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SKVM_RUN_DOCKER_INTEGRATION: '1'
+      SKVM_DOCKER_STORAGE_LIMITS: '0'
+      DOCKER_HOST: unix:///var/run/docker.sock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - name: Require the already-installed local daemon; never start privileged DinD
+        run: test -S /var/run/docker.sock && docker version && docker info
+      - name: Real panel confirmation, queued worker and enforced container limits
+        run: python -m pytest tests/test_docker_integration.py -q -rs --junitxml="$RUNNER_TEMP/docker-panel.xml"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-docker-panel-evidence
+          path: ${{ runner.temp }}/docker-panel.xml
+          retention-days: 7
+          if-no-files-found: warn
