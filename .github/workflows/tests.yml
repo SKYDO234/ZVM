@@ -60,7 +60,7 @@ jobs:
     env:
       SKVM_RUN_OS_BOOT: '1'
       SKVM_USE_KVM: '0'
-      SKVM_BOOT_REPORT_DIR: ${{ runner.temp }}/skvm-boot-evidence
+      SKVM_BOOT_REPORT_DIR: ${{ github.workspace }}/test-results/skvm-boot-evidence
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -84,7 +84,7 @@ jobs:
           path: |
             ${{ runner.temp }}/qemu-panel.xml
             ${{ runner.temp }}/image-catalog.json
-            ${{ runner.temp }}/skvm-boot-evidence
+            ${{ github.workspace }}/test-results/skvm-boot-evidence
           retention-days: 7
           if-no-files-found: warn
   docker-panel:

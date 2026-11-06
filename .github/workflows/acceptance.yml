@@ -25,7 +25,7 @@ jobs:
       SKVM_RUN_OS_BOOT: '1'
       SKVM_USE_KVM: '0'
       SKVM_BOOT_IMAGE_SHA256: ${{ inputs.ubuntu_sha256 }}
-      SKVM_BOOT_REPORT_DIR: ${{ runner.temp }}/skvm-boot-evidence
+      SKVM_BOOT_REPORT_DIR: ${{ github.workspace }}/test-results/skvm-boot-evidence
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,7 +53,7 @@ jobs:
           name: qemu-os-boot-evidence
           path: |
             ${{ runner.temp }}/qemu-os-boot.xml
-            ${{ runner.temp }}/skvm-boot-evidence
+            ${{ github.workspace }}/test-results/skvm-boot-evidence
           retention-days: 7
           if-no-files-found: warn
   docker-lifecycle:
