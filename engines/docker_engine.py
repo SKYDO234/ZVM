@@ -1,4 +1,5 @@
 """Unprivileged guest containers, not full VMs; Docker API is never exposed to browsers."""
+from contextlib import contextmanager
 import docker
 import os
 import threading
@@ -46,16 +47,25 @@ def _cpu_percent(ident, current, previous):
 
 
 class DockerEngine:
+    @contextmanager
     def _client(self, timeout=15):
+        # docker-py clients have close(), but DO NOT implement __enter__/__exit__.
+        # Keep acquisition errors separate from exceptions during a mutation:
+        # the latter must reach the caller's definite/uncertain classification.
         host = os.getenv('DOCKER_HOST', '')
         if host and not host.startswith('unix://'):
             raise EngineError('Direct remote Docker transports cannot safely use panel-host capacity. Deploy the authenticated SKVM agent beside the daemon and connect it as an external node instead.')
+        client = None
         try:
-            client = docker.from_env(timeout=timeout)
-            client.ping()
-            return client
-        except DockerException as exc:
-            raise EngineError(f'Local Unix Docker daemon unavailable: {str(exc)[:700]}. Check the socket path/permissions and daemon availability, or deploy an external SKVM node.') from exc
+            try:
+                client = docker.from_env(timeout=timeout)
+                client.ping()
+            except DockerException as exc:
+                raise EngineError(f'Local Unix Docker daemon unavailable: {str(exc)[:700]}. Check the socket path/permissions and daemon availability, or deploy an external SKVM node.') from exc
+            yield client
+        finally:
+            if client is not None:
+                client.close()
 
     def capabilities(self):
         base = {'available': False, 'name': 'Docker containers', 'storage_limits': False,

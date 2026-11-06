@@ -164,3 +164,26 @@ def test_start_waits_for_monitor_and_never_kills_a_possibly_resumed_guest(monkey
         assert qmp.call_count==4
     qmp.assert_any_call(s,'cont')
     process.terminate.assert_not_called();process.kill.assert_not_called()
+
+
+@pytest.mark.parametrize('failure',[None,'body','ping'])
+def test_real_docker_sdk_client_is_explicitly_closed_without_assumed_context_protocol(app,monkeypatch,failure):
+    import docker
+    from docker.errors import DockerException
+    # A genuine SDK client, with no daemon connection. Only its network boundary is replaced.
+    client=docker.DockerClient(base_url='unix:///nonexistent-skvm-test.sock',version='1.44')
+    assert not hasattr(client,'__enter__')
+    client.ping=Mock(side_effect=DockerException('fixture ping failure') if failure=='ping' else None,return_value=True)
+    client.close=Mock(wraps=client.close)
+    monkeypatch.setattr('engines.docker_engine.docker.from_env',lambda **kwargs:client)
+    def consume():
+        with DockerEngine()._client() as actual:
+            assert actual is client
+            if failure=='body':raise DockerException('fixture mutation interruption')
+    if failure=='ping':
+        with pytest.raises(EngineError,match='daemon unavailable'):consume()
+    elif failure=='body':
+        # A post-acquisition disconnect must NOT be misreported as a harmless failed ping.
+        with pytest.raises(DockerException,match='mutation interruption'):consume()
+    else:consume()
+    client.close.assert_called_once()

@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import requests
+from urllib3.exceptions import HTTPError
 
 RELEASES={'ubuntu-22.04':'jammy','ubuntu-24.04':'noble'}
 
@@ -60,7 +61,7 @@ def main():
     parser.add_argument('--keyring',default='/usr/share/keyrings/ubuntu-cloudimage-keyring.gpg')
     args=parser.parse_args()
     try:print(verified_checksum(args.os_id,args.keyring))
-    except (ValueError,OSError,requests.RequestException,subprocess.SubprocessError) as exc:
+    except (ValueError,OSError,requests.RequestException,HTTPError,subprocess.SubprocessError) as exc:
         print(str(exc),file=sys.stderr);return 1
     return 0
 

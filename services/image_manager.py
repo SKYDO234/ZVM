@@ -5,8 +5,9 @@ import json
 import os
 import time
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 import requests
+from urllib3.exceptions import HTTPError
 from flask import current_app
 from engines import EngineError
 from extensions import db
@@ -21,7 +22,7 @@ CATALOG = [
     ('debian-11', 'Debian 11', 'debian', 'https://cloud.debian.org/images/cloud/bullseye/latest/debian-11-generic-amd64.qcow2', 'debian:bullseye-slim', 8, 'Debian 11 is outside regular LTS. Review archive availability and extended support.'),
     ('debian-12', 'Debian 12', 'debian', 'https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2', 'debian:bookworm-slim', 8, None),
     ('debian-13', 'Debian 13', 'debian', 'https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2', 'debian:trixie-slim', 8, None),
-    ('fedora-40', 'Fedora 40', 'fedora', 'https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.14.x86_64.qcow2', 'fedora:40', 10, 'Fedora 40 is end-of-life. Archive only; not recommended for internet-facing workloads.'),
+    ('fedora-40', 'Fedora 40', 'fedora', 'https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2', 'fedora:40', 10, 'Fedora 40 is end-of-life. Archive only; not recommended for internet-facing workloads.'),
     ('centos-9', 'CentOS Stream 9', 'centos', 'https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2', 'quay.io/centos/centos:stream9', 10, None),
     ('alma-9', 'AlmaLinux 9', 'alma', 'https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2', 'almalinux:9', 10, None),
     ('rocky-9', 'Rocky Linux 9', 'rocky', 'https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2', 'rockylinux:9', 10, None),
@@ -30,7 +31,13 @@ CATALOG = [
 
 def seed_images():
     for ident, name, user, url, docker_image, disk, eol in CATALOG:
-        if not db.session.get(OSImage, ident):
+        existing = db.session.get(OSImage, ident)
+        if existing and ident == 'fedora-40' and existing.qemu_url == url.replace('Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2', 'Fedora-Cloud-Base-40-1.14.x86_64.qcow2'):
+            existing.qemu_url = url
+            existing.verification = 'unchecked'
+            existing.verification_message = 'Updated obsolete bundled Fedora archive filename; live verification is required.'
+            existing.verified_at = None
+        if not existing:
             db.session.add(OSImage(id=ident, name=name, username=user, qemu_url=url,
                                    docker_image=docker_image, min_disk_gb=disk, eol_warning=eol))
     db.session.commit()
@@ -43,7 +50,12 @@ class ImageManager:
         session.trust_env = False
         try:
             for _ in range(5):
-                validate_url(url, settings()['image_hosts'])
+                try:
+                    validate_url(url, settings()['image_hosts'])
+                except EngineError as exc:
+                    try:host = urlsplit(url).hostname or 'invalid'
+                    except ValueError:host = 'invalid'
+                    raise EngineError(f'{exc} Image host: {host}.') from exc
                 response = session.request(method, url, allow_redirects=False, timeout=(8, 30), **kwargs)
                 if response.is_redirect:
                     next_url = urljoin(url, response.headers.get('Location', ''))
@@ -59,7 +71,7 @@ class ImageManager:
                     response.close()
                 return
             raise EngineError('Too many image redirects.')
-        except requests.RequestException as exc:
+        except (requests.RequestException, HTTPError) as exc:
             raise EngineError(f'Image server unreachable: {type(exc).__name__}. Check outbound network access and the OS URL.') from exc
         finally:
             session.close()
@@ -126,7 +138,7 @@ class ImageManager:
                 run(['qemu-img', 'check', '-f', 'qcow2', temp], timeout=180)
                 os.replace(temp, target)
                 atomic_json(target.with_suffix('.json'), {'url': image.qemu_url, 'sha256': actual, 'downloaded_at': utcnow().isoformat()})
-            except requests.RequestException as exc:
+            except (requests.RequestException, HTTPError) as exc:
                 raise EngineError('Image download interrupted; no VM was created.') from exc
             finally:
                 temp.unlink(missing_ok=True)

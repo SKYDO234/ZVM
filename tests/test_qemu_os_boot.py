@@ -59,7 +59,7 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
     data={'id':str(uuid.uuid4()),'owner_id':1,'name':'skvm-real-boot','engine':'qemu','os_id':image.id,
           'ram_mb':768,'vcpus':1,'disk_gb':10,'username':'skvmcheck','ssh_port':allocate_port(),
           'runtime':{},'forwards':[]}
-    report={'test':'real Ubuntu 24.04 boot','started_at':datetime.now(timezone.utc).isoformat(),'phase':'preflight','passed':False}
+    report={'test':'real Ubuntu 24.04 boot','started_at':datetime.now(timezone.utc).isoformat(),'phase':'preflight','passed':False,'image_sha256':pin,'accel':'tcg','allocation':{'ram_mb':768,'vcpus':1,'disk_gb':10}}
     key=root/'disposable-client-key'
     try:
         subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)],check=True,capture_output=True)
@@ -101,6 +101,9 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         _wait_for_ssh(key,data['ssh_port'])
         persisted=_ssh(key,data['ssh_port'],'cat ~/skvm-persistence-check')
         assert persisted.returncode==0 and persisted.stdout==marker
+        block=_ssh(key,data['ssh_port'],'sudo -n blockdev --getsize64 /dev/vda')
+        assert block.returncode==0 and int(block.stdout.strip())==11*2**30
+        report['resized_guest_block_bytes']=int(block.stdout.strip())
         report['phase']='restarted-and-persistence-verified'
         panel.action('stop')
         # Reinstall must replace only this guest, clear old data, and accept its key.

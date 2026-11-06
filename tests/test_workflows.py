@@ -88,7 +88,7 @@ def test_docker_rejects_unauthenticated_tcp(app,monkeypatch):
     monkeypatch.setenv('DOCKER_HOST','tcp://docker.example.test:2375')
     monkeypatch.delenv('DOCKER_TLS_VERIFY',raising=False)
     with pytest.raises(EngineError,match='panel-host capacity'):
-        DockerEngine()._client()
+        with DockerEngine()._client():pytest.fail('Remote direct daemon must be rejected')
 
 
 def test_actual_host_capacity_can_deny_a_plan_permitted_request(app,users,monkeypatch):

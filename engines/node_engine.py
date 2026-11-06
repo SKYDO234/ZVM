@@ -4,6 +4,7 @@ import json
 from urllib.parse import urlsplit
 import uuid
 import requests
+from urllib3.exceptions import HTTPError
 from flask import current_app
 from engines import EngineError, UncertainError
 from services.security import decrypt, validate_url
@@ -57,7 +58,7 @@ class NodeEngine:
                     detail = detail.replace(token, '[redacted]')
                     raise EngineError(f'External node HTTP {response.status_code}: {detail}')
                 return data
-        except (requests.RequestException, ValueError) as exc:
+        except (requests.RequestException, HTTPError, ValueError) as exc:
             raise UncertainError('External node unreachable or TLS validation failed. Its actual state is unknown; the operation may still be running. Reconcile before retrying.') from exc
         finally:
             session.close()

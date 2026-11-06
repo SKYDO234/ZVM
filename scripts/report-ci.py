@@ -15,7 +15,9 @@ def escape(value):
 
 
 def annotation(level,title,message):
-    print(f'::{level} title={escape(title).replace(",","%2C").replace(":","%3A")}::{escape(str(message)[:18000])}')
+    message=str(message)
+    if len(message)>3500:message=message[:500]+'\n...bounded traceback; full details in artifact...\n'+message[-2900:]
+    print(f'::{level} title={escape(title).replace(",","%2C").replace(":","%3A")}::{escape(message)}')
 
 
 def report_junit(path):
