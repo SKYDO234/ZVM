@@ -4,7 +4,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 echo 'SKVM: installing Python dependencies and QEMU userspace tools (no systemd/KVM required).'
 if command -v apt-get >/dev/null; then
   if [[ $(id -u) -eq 0 ]]; then SUDO=(); elif command -v sudo >/dev/null && sudo -n true 2>/dev/null; then SUDO=(sudo -n); else SUDO=(false); fi
-  if ! "${SUDO[@]}" apt-get update || ! "${SUDO[@]}" apt-get install -y --no-install-recommends python3-venv qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssl; then
+  APT=(apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+  if ! "${SUDO[@]}" "${APT[@]}" update || ! "${SUDO[@]}" "${APT[@]}" install -y --no-install-recommends python3-venv qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssl; then
     echo 'WARNING: apt dependency installation failed or sudo is unavailable. The panel still works; local QEMU will show the exact missing capabilities. Use an external node if necessary.' >&2
   fi
 else

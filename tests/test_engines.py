@@ -89,12 +89,13 @@ def test_pid_reuse_never_targets_an_unrelated_process(monkeypatch):
 
 
 def test_stop_does_not_silently_kill_guest(monkeypatch):
-    process=Mock();process.wait.side_effect=psutil.TimeoutExpired(25)
+    process=Mock();process.wait.side_effect=psutil.TimeoutExpired(180)
     monkeypatch.setattr(QemuEngine,'_process',lambda *a:process)
     qmp=Mock(return_value={});monkeypatch.setattr(QemuEngine,'_qmp',qmp)
     with pytest.raises(EngineError,match='ACPI shutdown'):
         QemuEngine().stop(vm_spec())
     process.kill.assert_not_called();process.terminate.assert_not_called()
+    process.wait.assert_called_once_with(timeout=180)
     assert qmp.call_args.args[-1]=='system_powerdown'
 
 

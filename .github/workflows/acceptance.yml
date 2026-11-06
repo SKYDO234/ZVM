@@ -39,7 +39,7 @@ jobs:
               raise SystemExit('Supply the SHA256 from the authenticated current Ubuntu 24.04 amd64 vendor checksum manifest.')
           PY
       - name: Install userspace tools (KVM is not required)
-        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client
+        run: sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update && sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install -y --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client
       - run: pip install -r requirements.txt
       - name: Check actual tools before acceptance (never a skipped success)
         run: |

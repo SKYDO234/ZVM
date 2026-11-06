@@ -267,7 +267,9 @@ class QemuEngine:
                 return {'status': 'stopped'}
             self._qmp(spec, 'system_powerdown')
             try:
-                process.wait(timeout=25)
+                # TCG guests may need the OS's 90-second service-stop timeout,
+                # plus final disk flushing. Wait boundedly; never auto-kill.
+                process.wait(timeout=180)
             except psutil.TimeoutExpired as exc:
                 if not self._process(spec):
                     return {'status': 'stopped'}
