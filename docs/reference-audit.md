@@ -47,6 +47,14 @@ GTK/OpenGL desktop mode is not carried into a headless Codespaces panel: it depe
 
 ## URL verification performed during development
 
-On **2026-11-06**, live range-GET verification was attempted for **all nine** catalog entries. The supplied sandbox only permits outbound connections to GitHub and package registries, not the OS vendor hosts. Each request failed with a TLS/SSL connection error. Every corresponding image row was marked **unavailable**, not verified. This is a network limitation, **not evidence of HTTP 404 or a working current URL**.
+On **2026-11-06**, all nine live range-GET checks initially failed in the supplied sandbox because outbound vendor hosts are not permitted. These failures were recorded as **unavailable**, not verified, and did not create VPS records.
 
-No cloud image was downloaded and no guest OS boot was claimed in this environment. `python skvm.py verify-images` and Admin image verification provide the required real recheck on an unrestricted Codespace/external node. Failed downloads do not create VPS records.
+Equipped GitHub Actions runners subsequently performed the actual checks. All **nine HTTPS endpoints returned QCOW2 magic** on application source `c45ded3`:
+
+- The initial Fedora archive candidate returned HTTP 404. Its filename was corrected to `Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2`. The exact obsolete factory URL is migrated without overwriting an operator's custom URL or checksum.
+- Debian's official redirects required explicit `cdimage.debian.org`, `gemmei.ftp.acc.umu.se`, `laotzu.ftp.acc.umu.se` and `chuangtzu.ftp.acc.umu.se` allowlist entries. Every redirect is still HTTPS/host/public-DNS checked; no wildcard, private-address exception or TLS bypass was introduced.
+- Ubuntu 22.04/24.04, Debian 11/12/13, Fedora 40, CentOS Stream 9, AlmaLinux 9 and Rocky Linux 9 retain their original OS identities. EOL warnings remain for the aging releases.
+
+The full Ubuntu 24.04 acceptance also verifies its vendor manifest signature against a distribution-provided cloud-image keyring before accepting the image checksum. It uses real cloud-init, SSH and queued panel lifecycle operations under TCG. Other catalog entries received endpoint checks, **not** full OS boot certification. See [the current execution report](testing.md) for source revisions, reruns and results.
+
+Verification is host/time-specific. The panel and external node recheck selected URLs before downloads, and TLS/format validation without a trusted checksum is not presented as universal publisher-signature verification. The original uploaded reference remains byte-for-byte unchanged.

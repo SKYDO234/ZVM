@@ -4,6 +4,8 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
+**Validated:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42203719685)—166 backend tests on each of Python 3.11/3.12, eight desktop/mobile browser tests, the actual installer, native QEMU/Ubuntu/cloud-init/SSH/lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. See [the execution report and scope limits](docs/testing.md).
+
 ## The uploaded `n.txt` is the reference
 
 The entire 1,104-line uploaded Bash manager was read and audited before implementation. Its exact bytes are retained in [`docs/reference/n.txt`](docs/reference/n.txt). The Python engine is a conversion of its useful provisioning/lifecycle behavior—not a website that displays or executes the Bash script.
@@ -82,7 +84,7 @@ The backend builds controlled argument lists for `qemu-system-x86_64`, `qemu-img
 | Debian 11 | `debian-11` | Lifecycle/archive warning |
 | Debian 12 | `debian-12` | Bookworm |
 | Debian 13 | `debian-13` | Stable Trixie path instead of the script's daily URL |
-| Fedora 40 | `fedora-40` | EOL; archive candidate, explicit warning acknowledgement |
+| Fedora 40 | `fedora-40` | EOL; corrected archive filename, explicit warning acknowledgement |
 | CentOS Stream 9 | `centos-9` | GenericCloud |
 | AlmaLinux 9 | `alma-9` | GenericCloud |
 | Rocky Linux 9 | `rocky-9` | GenericCloud |
@@ -192,9 +194,10 @@ Workspace suspension terminates running processes; disk files survive ordinary r
 ## Tests and compatibility checks
 
 ```bash
+.venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 bash scripts/check-environment.sh
-python scripts/qemu-smoke-test.py
+.venv/bin/python scripts/qemu-smoke-test.py
 
 # Safe UI/test mode: refuses creation and lifecycle mutations, no demo VPS records.
 SKVM_TEST_MODE=1 python skvm.py
@@ -206,13 +209,18 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-Browser tests use their **own temporary DB and port 5558**, not `database/skvm.db`. Backend tests use temporary databases; provisioning boundaries are explicitly mocked. The local TLS integration uses a real HTTPS server, generated test-only certificates, the actual panel client and standalone agent; it validates CA/hostname rejection and bearer authentication without creating guests or claiming an external deployment.
+Browser tests use their **own temporary DB and port 5558**, not `database/skvm.db`. The desktop and Android-emulation journeys include registration, live charts, connected create/console/profile/settings pages, admin plan/user/node/image/policy controls, password/session revocation and logout. Their private fixture credentials are random, and test mode refuses actual provisioning.
 
-An equipped-host QEMU integration test starts a blank-disk TCG machine and verifies real QMP/PID/disk operations; it skips when tools are absent and does not claim an OS boot. **Separate opt-in acceptance tests** now cover an actual pinned Ubuntu 24.04 cloud-init/SSH boot, independent guest RAM/vCPU, graceful shutdown/growth/restart/persistence, and a real Docker container's cgroup limits/internal network/lifecycle/persistence. They do not run by default, install a daemon, require KVM, or touch the panel database.
+Unit tests isolate engine/transport boundaries explicitly. **Separate native acceptance** exercises the real Flask routes, one-use confirmation, durable jobs and actual background consumers:
 
-See [equipped-host commands and checksum requirements](docs/testing.md#opt-in-equipped-host-acceptance). The manual **Equipped Linux acceptance** workflow runs these tests on disposable Linux runners when explicitly requested. Adding that workflow is not evidence that it has run.
+- Actual standalone QCOW2/CIDATA, TCG process/QMP, duplicate-start protection, growth and deletion.
+- A trusted-pin Ubuntu 24.04 **TCG** boot, real cloud-init and SSH key authentication, guest-visible 768 MiB/1 vCPU and disk growth to 11 GiB, suspension policy, persistence, reinstall, force stop and deletion.
+- Actual Docker memory/CPU/PID limits, isolation/internal network, writable-layer telemetry and lifecycle/persistence.
+- Panel → real TLS/bearer agent → actual agent worker → real Docker guest, with separate databases and inventory/diagnostic/deletion checks. Only TCP dialing is routed to an ephemeral loopback port; TLS, HTTP, engines and resources are not mocked.
 
-See [the execution report](docs/testing.md) for exactly what was run and what could not be tested in the supplied sandbox.
+The push/PR **SKVM full checks** workflow runs Python 3.11/3.12, browser, the actual installer/blank-QEMU test, signed-manifest OS acceptance, all nine live image checks and Docker/TLS-agent acceptance on disposable Linux runners. Native tests do not run by default locally, install/start a Docker daemon, require KVM, prune unrelated resources or touch the live panel database. The manual **Equipped Linux acceptance** workflow remains available for selected checks.
+
+See [the execution report, limitations and equipped-host commands](docs/testing.md) for exact results. The supplied sandbox has no local engines and cannot reach OS vendors, so its four native skips are **not** compatibility passes. Remote CI results are identified separately; endpoint checks do not certify booting all nine OS releases, and Android emulation is not physical-device certification.
 
 ## Source layout
 

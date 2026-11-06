@@ -1,162 +1,153 @@
-# Test execution and honest compatibility report
+# Test execution and compatibility report
 
-Date: **2026-11-06 (UTC)**. Development environment: Linux x86-64, Python 3.11, approximately 3.7 GiB effective RAM and 2 effective CPUs. Measurements vary with running processes; these host values were never used as guest allocations.
+Date: **2026-11-06**. Validated application source: **`56bb0a2`** on `arena/364e5d5e-zvm`. Documentation-only follow-ups do not change that application source.
 
-## Executed successfully
+## Latest results
 
-### Python backend: 127 passed, 3 skipped
-
-Command: `.venv/bin/python -m pytest -q -rs`. Latest full run: **127 passed, 3 skipped, 1 warning in 26.44 seconds**.
-
-The suite covers:
-
-- Registration, login/logout, salted scrypt password hashing, safe post-login redirects.
-- Session revocation on password change or account disablement; ordinary registrations never grant admin.
-- Real CSRF tokens and rejection of missing tokens.
-- Admin route authorization and connected-page template rendering, working plan assignment and persistent settings.
-- Guarded account deletion, retained/anonymized audit history, rejection while resources/jobs remain, and old-session rejection even if a numeric SQLite user ID is reused.
-- Every instance details/metrics/console/action ownership path.
-- Strict guest/input/key validation; root login rejection; guest password hash rather than plaintext.
-- QEMU/Docker absence detection, TCG default, explicit-and-probed KVM selection at a mocked OS boundary.
-- QEMU command parameters, single-NIC extra forwarding, loopback binding and independent allocations.
-- Per-VM cloud-init YAML and temporary-file cleanup.
-- Independent disk-copy commands and stopped provisioning manifests.
-- Duplicate-process rejection, reused-PID safety, initial-paused QMP readiness/retry/resume, no force-kill after a lost resume reply, non-escalating ACPI shutdown, grow-only/stopped resizing.
-- Safe argument-list subprocess execution, URL/SSRF allowlists, path traversal rejection.
-- Docker SDK CPU/memory limits, UID 1000, dropped capabilities, no privilege/host socket, storage-budget honesty, safe network cleanup/retry, and rejection of direct remote transports (use a co-located node agent for correct capacity).
-- Cgroup v1/v2 leaf/ancestor memory, quota and cpuset discovery, namespace/mount roots/escaped paths, shared-parent headroom, scoped real usage and fail-closed unknown/missing capacity.
-- Per-user RAM/CPU/disk/count quotas, pending/uncertain create and disk-growth reservations (including administrator-requested growth charged to its owner), actual host capacity denial.
-- Independent 2048 MiB / 2 vCPU / 20 GiB allocation reporting rather than host totals.
-- Provisioning failure without a VPS record; record insertion only after an explicitly mocked successful engine boundary.
-- One-time encrypted review tickets, duplicate-confirmation prevention and deferred provisioning.
-- SQLite persistence across app factory lifecycles.
-- External-agent bearer authentication, no public panel routes, persistent idempotency IDs, transport allowlisting, verified token rotation, test-mode refusal, node disk-resize JSON persistence.
-- Version-1 node schemas, bounded TLS transport, no redirects, identity/allocation checks, finite capacity numbers, invalid/5xx responses remaining uncertain and token error redaction (HTTP/engine boundaries mocked).
-- Read-only outcome recovery with actual-file fixtures and mocked native QCOW2/Docker/process boundaries: complete CIDATA/manifest proof, target-only disk metadata synchronization, no lifecycle replay, isolation/PID/device/namespace drift rejection, orphan-network refusal, and preserved reservations.
-- Durable completed SQLite transactions remain completed even when a simulated commit acknowledgement is lost.
-- Restart checks available memory after graceful shutdown; failed headroom checks never start a process. Stopped disk growth does not require guest RAM a second time. Panel and agent paths are covered.
-- Docker paused force-stop, bounded observation after daemon acknowledgement, refusal to report an unverified state as stopped, actual-counter CPU history and unavailable layer-size handling (SDK boundaries mocked).
-- QCOW2 endpoint verification success/failure state at a mocked HTTP boundary.
-- Request-independent worker audit insertion.
-- Stable private secret files and bounded emulator logs without following symlinks.
-
-**Tests that mock engines do not create real guests.** All three real-resource integration tests were skipped: blank-disk QEMU lacks binaries; full-OS QEMU and Docker are explicit opt-ins. The real HTTPS loopback test below is not a resource-provisioning test. Fixture records only exist in temporary databases. They are not inserted into `database/skvm.db`. There is no fake engine wired into the application.
-
-One known non-failing warning: Passlib imports Python 3.11's deprecated `crypt` module for its SHA512-crypt backend. This is not plaintext storage. Passlib also provides a pure-Python fallback on versions without that module. Application login passwords use Werkzeug scrypt, separately.
-
-### Chromium desktop + Android emulation: 4 passed
-
-Command: `LD_LIBRARY_PATH=/tmp/al2023/lib SKVM_BROWSER_EXECUTABLE_PATH=/tmp/chromium npm run test:ui`. Latest run: **4 passed in 18.1 seconds** after the capacity/scope UI changes and asset rebuild.
-
-The sandbox blocks Playwright's ordinary browser-download host. For this run only, a Chromium package was obtained from the allowed npm registry, extracted outside the repository, and used for browser execution. No browser binaries or test data are committed. Normal development can use `npx playwright install chromium`.
-
-Executed on 1440-pixel desktop and Playwright Pixel 7 / Chromium emulation:
-
-- Landing → registration → authenticated dashboard.
-- Zero instances/allocations are actual empty-database values.
-- Host chart collects two real measured samples; no historical points are seeded.
-- Responsive layout has no horizontal overflow; Android sidebar opens and navigates.
-- My VPS, create, console, profile, settings and docs routes work.
-- Docker selection hides/disables QEMU credential inputs and shows storage acknowledgement.
-- Form summary reflects entered configuration.
-- Test-mode submission shows a real error and leaves total VPS at zero.
-- Ordinary user cannot access admin.
-- No browser JavaScript exceptions.
-
-Browser test server: **5558**, automatically started/stopped, isolated temporary database, real provisioning disabled. This is **Android browser emulation, not a physical-device certification**. Desktop/mobile screenshots were inspected locally but are not part of the source patch.
-
-### Real local HTTPS client/agent integration: passed
-
-`tests/test_node_tls.py` runs the actual NodeEngine client against the standalone Flask agent over real loopback TLS, with generated temporary CA/server keys and certificates. It verifies:
-
-- An untrusted CA fails before an authenticated HTTP request succeeds.
-- Explicitly trusting that CA allows a real version-1 capabilities response with actual host measurements and an empty temporary inventory.
-- A different allowlisted hostname still fails certificate hostname verification.
-- A wrong bearer token receives an actual HTTP 401.
-- No AgentInstance resources are created; the test agent really refuses provisioning in test mode.
-
-Only the TCP dialing destination is routed to an ephemeral loopback port, avoiding privileged port 443. HTTP responses, TLS, hostname/CA verification, token checking and protocol decoding are **not mocked**. This does not validate external DNS, a deployed reverse proxy, network-partition behavior or real remote guest execution.
-
-### Other checks
-
-- `npm run build:assets`: local vendor files/licenses/font and compiled Tailwind rebuilt successfully.
-- `node --check static/js/app.js`: passed.
-- Python bytecode compilation: passed.
-- Ruff name/import checks (`ruff check --select F .`): passed.
-- Uploaded reference checksum verified against the exact preserved file.
-- Both GitHub workflow files parse as valid YAML; no remote execution is implied.
-- Shell syntax checks passed for every installer/environment script.
-- `bash scripts/check-environment.sh`: correctly reports the missing capabilities below.
-- Live Flask preview binds `0.0.0.0:5555` with no host/origin rejection.
-
-## Unavailable or unverified, not reported as success
-
-| Capability | Actual result |
+| Check | Result and scope |
 |---|---|
-| `qemu-system-x86_64` | Not installed |
-| `qemu-img` | Not installed |
-| `cloud-localds` | Not installed |
-| `/dev/kvm` | Absent; KVM **not** claimed |
-| Local Docker daemon/socket | No accessible daemon/socket |
-| Real blank-disk QEMU integration | **Skipped**, due to missing binaries |
-| Full-OS QEMU and real-Docker opt-ins | **Skipped**, not enabled; prerequisites are also unavailable here |
-| `python scripts/qemu-smoke-test.py` | Exits nonzero with `UNAVAILABLE`; it does not fake a pass |
-| All nine vendor cloud-image endpoints | Live range-GET attempted; blocked with SSL/TLS connection failures by sandbox outbound-host policy |
-| Cloud image download / cloud-init / guest OS boot / SSH | **Not performed** here |
-| Real Docker image pull/container lifecycle/cgroup enforcement | **Not performed** here |
-| Live remote TLS node deployment | Protocol/auth/persistence unit-tested **and** real loopback HTTPS tested; **no external deployment** validated here |
-| GitHub Actions workflows | Added for future runner execution; **not** claimed to have run remotely |
+| Local backend/security/regressions | **166 passed, 4 skipped, 1 warning in 45.55 s** |
+| Local measured Python coverage | **71%** (3,009 statements); not a claim of exhaustive coverage |
+| Local Chromium desktop + Pixel 7 emulation | **8 passed in 49.9 s** |
+| Remote Python 3.11 and 3.12 | **166 passed, 4 skipped on each version**, source `56bb0a2` |
+| Actual Ubuntu 24.04 / TCG / cloud-init / SSH | **1 passed, 0 skipped** on `56bb0a2`, including the corrected bounded graceful-shutdown wait |
+| Actual Docker and panel → TLS agent → Docker | **2 passed, 0 skipped**, source `56bb0a2` |
+| All nine live image endpoints | **9 verified HTTPS QCOW2 endpoints** on `56bb0a2`, including the Fedora archive and Debian mirror redirects |
+| Actual documented installer + blank-disk QEMU | **Passed**, actual installer + native smoke/integration on `56bb0a2` |
+| Interactive administrator bootstrap | Passed in a disposable DB using a genuine terminal; hidden password, stored hash, no silent promotion, no guests |
 
-The QEMU integration test and CI userspace-QEMU job validate real disk/process/QMP operations only when actually executed on an equipped Linux host. The blank-disk test does **not** assert a successful cloud OS boot. The separate opt-ins below are written to test OS/SSH and Docker behavior; they have not been executed in this sandbox.
+**Final-source CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42203719685](https://github.com/SKYDO234/ZVM/actions/runs/42203719685), application commit `56bb0a256dc2b8789a6aa22359dc9fd419e4915c`. The real Ubuntu panel/SSH/lifecycle step ran from **10:35:58 to 10:49:17 UTC** and passed without skips. Earlier failures were fixed and rerun, not counted as successes. Documentation-only follow-ups use `[skip ci]` to avoid needlessly repeating the same long native execution; no application/test/workflow code changes after this validated revision are included in those follow-ups.
 
-## Opt-in equipped-host acceptance
+## What the automated checks exercise
 
-Use a dedicated/disposable **x86-64 Linux** host with conservative free capacity, trusted internet access, and userspace QEMU/cloud-localds/OpenSSH installed. These tests use temporary app databases/directories and unique resource IDs; they never use `database/skvm.db`, provision seeded success rows, prune other containers/images, start a daemon, require KVM, or launch privileged containers. Default pytest can run the **blank-disk** QEMU test if its binaries are installed; full-OS and Docker tests require the flags below.
-
-### Real Ubuntu/cloud-init/SSH boot (not run here)
-
-Obtain the current Ubuntu 24.04 **amd64** image SHA256 from the authenticated vendor checksum manifest (verify its signed manifest through your normal trusted vendor procedure). It must match the built-in Noble `current` image at download time. A vendor update/pin mismatch is a failure, never a reason to disable checksum/TLS verification. The test does not auto-trust a checksum downloaded alongside untrusted data.
+### Backend, security and persistence
 
 ```bash
-# Prerequisites on Debian/Ubuntu; installation may require an operator:
-# sudo apt-get install qemu-system-x86 qemu-utils cloud-image-utils genisoimage openssh-client
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q -rs
+.venv/bin/python -m pytest --cov=engines --cov=services --cov=routes --cov=models --cov=skvm --cov-report=term-missing -q
+```
+
+Temporary databases/directories are used, never `database/skvm.db`. Unit tests explicitly mock engine/transport boundaries where real host resources are not intended. Native resource tests are separately identified below.
+
+Coverage includes:
+
+- Registration/login/logout, salted password hashing, safe redirects, CSRF and role/ownership checks on details, metrics, console and every action.
+- Password/profile changes, session revocation, account disablement, numeric-user-ID reuse, guarded deletion, retained audits, and purpose-separated login/registration throttles.
+- Admin users, roles, plans, quotas, persistent settings, image configuration and node registration/token handling.
+- Strict HTML5 parsing of public/authenticated/admin/instance/job forms, including correct node-form actions and CSRF fields.
+- Creation review, encrypted expiring confirmation, duplicate-confirmation rejection, no premature VPS row, conservative capacity/quotas and uncertain-operation reservations.
+- Cgroup v1/v2 membership/mount/ancestor accounting, sibling pressure, CPU quotas/affinity, private-path/SSRF protection and fail-closed unknown capacity.
+- Controlled QEMU arguments, full-copy disk provisioning, independent allocations/seeds, initial paused QMP launch/resume, exact process identity, duplicate start/PID reuse, no automatic graceful-to-force escalation, disk growth and recovery proof.
+- Docker SDK signatures and explicit client closure using a genuine SDK client at a mocked network boundary; resource/security options, network cleanup, measured CPU history and exact-container writable-layer telemetry.
+- Allowlisted HTTPS redirects, HTTP cleanup, raw stream timeout classification/deadlines, cached-image SHA256 revalidation, symlink rejection and partial-file cleanup.
+- Real background-thread startup, idempotency, shutdown drain/restart, and refusal of mutations in test mode.
+- Versioned node schemas, capacity/identity validation, token redaction, durable/idempotent operations and metadata-only reconciliation without replaying mutations.
+
+The one local warning is Passlib's use of Python 3.11's deprecated `crypt` interface. It is not a failed test. Python versions actually checked remotely are 3.11 and 3.12.
+
+### Browser checks
+
+```bash
+npm ci
+npm run build:assets
+npx playwright install --with-deps chromium
+npm run test:ui
+```
+
+Four journeys execute on both **1440 × 960 desktop Chromium** and **Pixel 7 Chromium emulation**:
+
+1. Responsive landing, registration, actual empty dashboard/activity/chart samples and mobile navigation.
+2. Connected authenticated pages, live allocation form summary, Docker/QEMU field switching, honest test-mode provisioning refusal and ordinary-user admin denial.
+3. Admin node-form submission/rejection, plan creation/assignment, user disablement/login denial/re-enable, image checksum configuration, resource policy persistence, guarded deletion cancel/confirm and metrics authorization.
+4. Profile/password replacement, rejection of an old session, session revocation, confirmation dialog, mobile-menu logout and unauthenticated API rejection.
+
+There are no seeded historical chart points or guests and no browser JavaScript exceptions. The test server uses **port 5558**, its own temporary database, private randomly generated fixture credentials and **real provisioning disabled**. These are browser/UI results, not native resource tests or physical-device certification.
+
+The sandbox could not reach Playwright's normal browser-download host, so its local Chromium executable was extracted from an allowed npm package outside the repository. CI uses the ordinary Playwright installer. No browser binaries or credential artifacts are committed.
+
+### Actual TLS/authentication
+
+`tests/test_node_tls.py` uses generated temporary CA/server certificates, the actual `NodeEngine`, and a real HTTPS agent. It verifies untrusted CA, wrong hostname and wrong bearer rejection, and a valid authenticated capabilities response. Only the TCP destination is routed to an ephemeral loopback port; TLS, hostname checks, HTTP, token checking and JSON are genuine.
+
+The native Docker suite additionally provisions a **real guest through this TLS agent**, using separate panel/agent databases and actual worker threads. This is an isolated loopback integration, **not** a claim that an internet-facing node/reverse proxy was deployed.
+
+## Equipped-host resource acceptance
+
+`.github/workflows/tests.yml` executes these checks on disposable Ubuntu Linux runners. Native tests use unique UUIDs, isolated databases and owned-resource cleanup. They do not seed success rows, prune unrelated resources, start a Docker daemon, require KVM or use privileged guest containers.
+
+### Installer and blank-disk QEMU
+
+The `qemu-userspace` CI job executes **the actual `scripts/install-codespaces.sh`**, then `scripts/qemu-smoke-test.py` and `tests/test_qemu_integration.py` with the installed virtual environment. Package network retries/timeouts are bounded. The smoke/integration steps fail if real tools are missing, even if the installer correctly fell back to panel-only mode.
+
+The integration verifies actual standalone QCOW2 creation, CIDATA seed, TCG process/QMP state, duplicate start rejection, explicit force stop, stopped disk growth and owned deletion. A running blank disk is **not** called an OS boot.
+
+### Ubuntu 24.04 cloud-init/SSH and lifecycle
+
+Install QEMU, qemu-img, cloud-localds, OpenSSH and **a trusted distribution Ubuntu cloud-image keyring**, then:
+
+```bash
 .venv/bin/python scripts/qemu-smoke-test.py
-read -r -p 'Vendor-verified current Ubuntu amd64 SHA256: ' SKVM_BOOT_IMAGE_SHA256
-export SKVM_BOOT_IMAGE_SHA256
+export SKVM_BOOT_IMAGE_SHA256="$(.venv/bin/python scripts/verified-ubuntu-checksum.py)"
 SKVM_RUN_OS_BOOT=1 .venv/bin/python -m pytest tests/test_qemu_os_boot.py -q -rs
 ```
 
-The checksum must be exactly 64 hex characters. The test creates a short-path temporary data directory (QEMU Unix-socket limits), a private disposable SSH key, an independent 10 GiB QCOW2 and real CIDATA seed. It explicitly uses **TCG**, boots 768 MiB/1 vCPU, waits for real key-authenticated SSH and `cloud-init status`, checks Ubuntu 24.04 and actual guest RAM/vCPU, persists a marker, gracefully stops, grows to 11 GiB, restarts, verifies the marker, then stops/deletes its own UUID. It does not need a plaintext password or an uploaded private key. Cleanup forcibly stops only its own proven process if needed.
+`verified-ubuntu-checksum.py` verifies the HTTPS vendor manifest's GPG signature against the **distribution-provided keyring**, not a key fetched alongside that manifest. It accepts exactly one checksum for the selected image. A changed image/pin mismatch fails; TLS or signature checks are never bypassed.
 
-Optional `SKVM_BOOT_REPORT_DIR=/operator/chosen/test-output` records phase/result metadata and bounded failure log tails, **not** private key contents. Keep output outside Git. Source-level/native recovery assertions are exercised against actual qemu-img/cloud-localds output only when this test runs.
+`tests/test_qemu_os_boot.py` executes real Flask login/create/review/one-use confirmation routes, the durable queue and an **actual background consumer**, followed by:
 
-### Real Docker lifecycle/enforcement (not run here)
+- Real independent 10 GiB QCOW2 and CIDATA creation, native image integrity and recovery checks.
+- **TCG explicitly**, 768 MiB RAM / 1 vCPU; real QMP running state followed separately by actual SSH readiness.
+- Key-authenticated configured user, Ubuntu 24.04 identity, guest-visible RAM/vCPU, `cloud-init status --wait` completion with no errors.
+- Guest data write, actual ACPI stop/admin suspension, start denial while suspended and unsuspension.
+- Stopped growth to 11 GiB, guest-visible **11 × 2³⁰-byte block device** and persisted data after reboot.
+- Graceful stop, same-guest reinstall, new first boot/key authentication, absence of the old data, explicit force stop, disk/row deletion.
 
-Docker must already expose an accessible **local Unix** daemon with actual memory/CPU controls. Use a trusted dedicated daemon; the test does not install one or enable Docker-in-Docker/privilege/systemd. It pulls the catalog's Ubuntu container image; cached images are deliberately not pruned.
+A repeated run exposed Ubuntu's final shutdown service occasionally exceeding 25 seconds under TCG. The engine now waits **up to 180 seconds**, never automatically force-kills, and still reports failure if the process remains. This fix is not hidden by weakening the native test.
+
+Optional `SKVM_BOOT_REPORT_DIR` records phase/allocation/checksum/result JSON and bounded failure log tails. Private keys and disks are never uploaded. Native tests can take many minutes under TCG.
+
+### Docker and TLS-agent provisioning
+
+Use an already-accessible **local Unix** daemon with actual memory/CPU controls:
 
 ```bash
-# Use your actual rootless Unix socket if applicable; never a TCP/SSH daemon URL.
+# Set your actual Unix socket if needed; never a remote TCP/SSH daemon URL.
 # export DOCKER_HOST=unix:///run/user/1000/docker.sock
 SKVM_RUN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest tests/test_docker_integration.py -q -rs
 ```
 
-It creates a disposable 128 MiB/1 CPU/1 GiB **container budget**, verifies UID 1000 and actual in-container memory/CPU/PID cgroup limits, internal network and no host mounts/ports, polls real usage, verifies writable-layer persistence through stop/start/restart, then force-stops/deletes the container and owned network. Missing layer-size telemetry remains unavailable. Storage is explicitly **budget-only unless the operator has independently enabled/verified driver enforcement**; passing this test must not be described as proof of a universal Docker rootfs quota.
+The first case verifies real panel confirmation/queued creation, **128 MiB / 1 CPU**, in-container memory/CPU/**128-PID** enforcement, UID 1000, no privilege/host mounts/ports, internal network, actual process/writable-layer telemetry, data persistence through stop/start/restart, force stop and owned deletion.
 
-### Manual CI on disposable equipped runners
+The second registers the actual TLS/bearer-authenticated agent through the admin route, provisions through **both real queue consumers**, verifies panel/agent records and actual inventory/diagnostics, and stops/deletes the container through the authenticated protocol.
 
-`.github/workflows/acceptance.yml` provides **Equipped Linux acceptance**, with `qemu`, `docker`, or `both` targets. It runs only by manual `workflow_dispatch`; it is not a hidden image download on every PR. Enable/publish the workflow on your default branch before using the Actions manual-run control. For QEMU, supply the trusted current image checksum. Preflight steps fail if tools/daemon/checksum are missing, rather than treating a skip as an acceptance pass. JUnit output and bounded QEMU phase/failure evidence are retained for seven days; no private keys/disks are uploaded.
+The requested **1 GiB disk is explicitly budget-only** unless a supported driver has separately been configured and verified for rootfs quota enforcement. These tests do not certify universal Docker storage quotas or container-to-VM equivalence.
 
-**Neither acceptance job nor the existing push/PR checks have been executed remotely during this session.** A workflow definition is not a compatibility result.
+### Image catalog verification
 
-## Deployment acceptance checklist
+```bash
+.venv/bin/python scripts/check-image-catalog.py --report test-results/image-catalog.json --strict
+```
 
-On the actual Codespace or Linux node:
+All nine URLs are range-read from a disposable database and checked for QCOW2 magic. Fedora 40 uses the corrected `Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2` archive filename. Debian's official HTTPS redirects require explicit `cdimage.debian.org` and the observed `gemmei`, `laotzu`, and `chuangtzu.ftp.acc.umu.se` mirror allowlist entries. Each redirect still undergoes HTTPS/host/public-DNS validation. No wildcard or TLS fallback was added.
 
-1. Install userspace dependencies and rerun environment + real TCG probes.
-2. Verify each selected image URL from that host and pin a trusted vendor checksum.
-3. Create a small guest within real host capacity; confirm disk/seed, start it, inspect QMP state and actual serial boot output.
-4. Verify cloud-init, the configured SSH user/key, and a real SSH tunnel. Do not confuse QMP “running” with guest readiness.
-5. Exercise graceful stop, explicit force-stop, duplicate start prevention, restart, stopped disk growth and deletion on disposable data.
-6. For Docker, verify actual cgroups, driver prerequisites, internal network isolation, writable-layer metrics, budget/enforcement labels and lifecycle behavior.
-7. If using external nodes, validate certificate trust, bearer-token rejection, capacities/inventory, asynchronous operations and network-partition reconciliation.
-8. Keep Codespaces forwarding Private, enable secure cookies for HTTPS, back up SQLite + keys + stopped guest storage, and review OS support lifecycles.
+**Endpoint verification is not an OS boot, support-lifecycle guarantee or publisher-signature check.** Debian 11 and Fedora 40 keep their warnings. All nine were verified remotely; the supplied sandbox itself still cannot reach vendor hosts.
+
+### CI evidence
+
+The push/PR workflow covers Python 3.11/3.12, browser, actual installer/blank QEMU, signed-checksum full-OS panel acceptance, and Docker/TLS-agent panel acceptance. `scripts/report-ci.py` publishes bounded JUnit/catalog details through GitHub check annotations in addition to artifacts; failures retain root causes even when log-storage downloads are blocked. Artifacts expire after seven days and exclude keys/disks.
+
+`.github/workflows/acceptance.yml` also provides manually dispatched `qemu`, `docker` or `both` targets. Publish the workflow on your default branch before using its manual Actions control. For manual QEMU runs, supply the trusted current image checksum; missing tools, pin or daemon are failures, not skipped acceptance successes.
+
+## Boundaries and deployment acceptance
+
+- The supplied sandbox still has **no local QEMU/qemu-img/cloud-localds, Docker daemon or KVM**. Its four local native skips are shown, not counted as passes. Native execution takes place on the identified equipped CI runners.
+- Only **Ubuntu 24.04** received a full OS/SSH/lifecycle acceptance run; other catalog entries received endpoint checks, not complete boot certification.
+- KVM, a physical Android device, ARM hosts, live WAN/reverse-proxy deployment, rootless Docker, all storage drivers/quotas and every partition/crash timing have **not** been certified.
+- A fresh Codespaces devcontainer build and its actual long-running production deployment must still be checked in that Codespace. The Linux installer CI does not claim to be such a deployment.
+- No tests prove dedicated hardware performance, VM-grade Docker isolation, universal disk quotas, unlimited capacity, uptime or production hardening for hostile public multi-tenancy.
+
+Before real deployment: keep port 5555 Private; enable secure cookies for HTTPS; create your own administrator interactively; verify the selected engine and image from the provisioning host; check real serial/cloud-init/SSH readiness, not just QMP status; validate your node's TLS/proxy/socket/cgroup/storage arrangement; and back up SQLite, keys and stopped guest storage together.
+
+The live preview uses the actual application and preserved empty production database. No default administrator, public password, fake IP, fake guest or success metrics are inserted for the preview.
