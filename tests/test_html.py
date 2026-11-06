@@ -26,7 +26,7 @@ def test_public_pages_are_valid_html_with_valid_form_targets(client,path):
     parsed(client.get(path))
 
 
-@pytest.mark.parametrize('path',['/dashboard','/vps','/vps/create','/vps/console','/profile','/settings','/admin','/docs'])
+@pytest.mark.parametrize('path',['/dashboard','/vps','/vps/create','/vps/console','/webssh','/profile','/settings','/admin','/docs'])
 def test_authenticated_pages_are_valid_html(client,users,path):
     signin(client,'operator@example.test');root=parsed(client.get(path))
     if path=='/admin':
@@ -38,6 +38,7 @@ def test_authenticated_pages_are_valid_html(client,users,path):
 def test_instance_controls_console_and_job_render_valid_forms(client,users):
     instance=fixture_vps(users[0]);signin(client,'operator@example.test')
     parsed(client.get(f'/vps/{instance.id}'));parsed(client.get(f'/vps/{instance.id}/console'))
+    parsed(client.get(f'/webssh/{instance.id}'))
     job=Job(id=str(uuid.uuid4()),owner_id=users[0].id,instance_id=instance.id,kind='start',engine='qemu',status='failed')
     db.session.add(job);db.session.commit()
     parsed(client.get(f'/vps/jobs/{job.id}'))

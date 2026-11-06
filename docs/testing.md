@@ -1,5 +1,17 @@
 # Test execution and compatibility report
 
+## WebSSH integration validation
+
+The uploaded `webssh.html` is preserved unchanged in `docs/reference/webssh.html`; the deployed panel adapts its terminal layout/controls with local xterm assets and a real authenticated SSH/WebSocket backend rather than mounting its nonexistent polling/PIN APIs or random latency.
+
+Current local results (2026-11-06): **278 backend tests passed, 4 native tests skipped**, **16 desktop/Pixel 7-emulation browser journeys passed**. The full local backend run took **142.86 seconds** with **76%** measured Python coverage (3,879 statements); the browser run completed in **1.4 minutes**. The one warning remains Passlib/Python 3.11 `crypt` deprecation. Equipped CI results are recorded separately when available.
+
+New coverage includes actual SSH key exchange/password/encrypted Ed25519-RSA-ECDSA authentication, explicit first/changed fingerprints before guest authentication, PTY/resize/control/Unicode I/O, real measured transport probes, owner/admin/Origin/CSRF enforcement, revoked/disabled/suspended/deleted access, ephemeral credential handling, bounded key-decryption work, bounded pending input during a stalled guest authentication, cross-worker limits and actual **two-worker Gunicorn** HTTP/WebSocket handling. A real TLS node relay checks CA/hostname/bearer/Origin/target mismatch, redirect refusal, input/resize/output and node disablement; a failed remote relay never connects to panel localhost.
+
+**Boundary:** protocol/browser tests use a disposable real SSH echo/PTY server and explicitly replace QEMU endpoint discovery. The separate SSH browser server uses a temporary database with named synthetic protocol-fixture records; those are not production guests or native-OS evidence. All original UI journeys still run against the separate empty, provisioning-disabled database. No production account/data was changed.
+
+The existing opt-in Ubuntu/QEMU acceptance test now also verifies **unmocked QEMU listener selection → actual guest SSH → panel WebSocket**, independently compared host fingerprints, `id -un`, `stty` PTY resizing and explicit changed-key acceptance after a real reinstall. It is not claimed as a local pass: this sandbox lacks QEMU. Results from an equipped CI run must be read separately; earlier native baselines do not certify this new feature. [WebSSH usage/security/limits](webssh.md).
+
 ## Navigation-loop regression fix
 
 The previous initial-password guard caused the reported one-page symptom: every authenticated navigation route returned `302 /profile` and `/api/metrics` / `/api/activity` returned `403 password_change_required`. The new behavior opens Overview after login (or the validated local `next` destination), removes that global redirect/API lock, and keeps a persistent password-change reminder instead. The existing rotation flag remains in SQLite as a reminder flag, so existing accounts, sessions, passwords, data and schema are preserved.

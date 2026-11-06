@@ -24,6 +24,7 @@ The **root installer** installs Python/venv/build prerequisites, QEMU/cloud-init
 2. On a **new, empty panel**, sign in with **username `admin` / password `admin123`**. Login opens **Overview** immediately and all pages/buttons remain available under normal authorization. A persistent, non-blocking reminder asks you to replace the initial password in **Profile** with a private password of **12–128 characters**. Passwords are stored as salted hashes. Reinstallation/restart **never resets the password or adds this account to an existing installation**.
 3. Open **Settings** for the *actual* local engine capabilities. Missing host permissions, a Docker daemon or QEMU are not hidden. Installing binaries does not grant a Codespace Docker/cgroup/KVM privileges.
 4. Configure an available engine, select **Create VPS**, review your configuration, and confirm. Watch its background job. A successful create leaves a **real stopped instance**; use **Start** to boot/run it.
+5. For a running QEMU guest, open **WebSSH** from the sidebar or instance details. Authenticate with the **guest** password/private key and confirm its host fingerprint. The existing serial console remains available for boot/SSH troubleshooting. Docker uses its existing logs/diagnostics, not fabricated SSH access.
 
 The default install stays in the foreground; leave the terminal open. Alternatively:
 
@@ -40,6 +41,22 @@ bash install.sh --port 31120        # Explicit port override for this launch
 Background logs are `data/logs/panel.error.log` / `panel.access.log`; the master PID is `data/panel.pid` (or your configured data directory). Repeated starts do not duplicate the server; occupied ports or unproven PIDs are refused without killing unrelated processes. Background hosting lasts only while the Codespace runs. No systemd, privileged DinD, Docker-socket chmod or automatic daemon start is used. Existing accessible Docker daemons are reused.
 
 `python skvm.py` **still works** and automatically uses `.venv/bin/python`. Node/npm are build-time only; browser dependencies are bundled locally, without CDN requirements. A newly downloaded Node runtime lives in ignored `.local/node`; the installer reuses it (for manual npm work, add `.local/node/bin` to `PATH`). Legacy `scripts/install.sh` delegates to the root installer; `scripts/install-codespaces.sh` remains a setup-only compatibility wrapper.
+
+### WebSSH terminals
+
+The uploaded terminal design is integrated into the authenticated panel with local **xterm 6**, real full-duplex **WebSockets/SSH PTYs**, password or encrypted private-key authentication, explicit first/changed host-key confirmation, resize, mobile special keys, clear/disconnect and measured transport RTT. Only the selected managed QEMU guest is reachable; arbitrary hosts/ports/root, host shells, stored private keys and token/PIN bypasses are not exposed. Existing accounts/data and the non-blocking initial-password reminder are preserved.
+
+**Use HTTPS** (localhost HTTP is only for development). External guests connect through the node's verified-TLS, bearer-authenticated **WSS relay**, never the panel's localhost. Update/restart both ends and enable proxy WebSocket upgrades. Sessions have cross-worker limits/timeouts and close after logout, password/session revocation, suspension or loss of ownership. See [WebSSH usage, security, limits and troubleshooting](docs/webssh.md) and [node proxy setup](docs/external-nodes.md).
+
+Existing installations need the new Python dependencies and a worker restart, not a database reset:
+
+```bash
+bash install.sh --no-start
+.venv/bin/python scripts/serve-panel.py --stop
+.venv/bin/python scripts/serve-panel.py --background
+```
+
+The local frontend dependencies are also committed; `npm ci && npm run build:assets` rebuilds them. Set `SKVM_WEBSSH_ENABLED=0` and restart to disable WebSSH. A running QEMU process alone does not prove the guest OS/SSH service is ready.
 
 ### Existing installation stuck on one page
 

@@ -58,7 +58,7 @@ class NodeEngine:
                     detail = detail.replace(token, '[redacted]')
                     raise EngineError(f'External node HTTP {response.status_code}: {detail}')
                 return data
-        except (requests.RequestException, HTTPError, ValueError) as exc:
+        except (requests.RequestException, HTTPError, ValueError, OSError) as exc:
             raise UncertainError('External node unreachable or TLS validation failed. Its actual state is unknown; the operation may still be running. Reconcile before retrying.') from exc
         finally:
             session.close()

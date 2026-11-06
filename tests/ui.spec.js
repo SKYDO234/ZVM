@@ -29,7 +29,7 @@ test('register, navigate, inspect real allocations and submit honest test-mode f
   await page.getByRole('button',{name:'Review configuration'}).click();
   await expect(page.locator('.toast-error')).toContainText('Test mode');
   const metrics=await page.request.get('/api/metrics');expect((await metrics.json()).totals.count).toBe(0);
-  for(const path of ['/vps/console','/profile','/settings','/docs']){expect((await page.goto(path)).status()).toBe(200);}
+  for(const path of ['/vps/console','/webssh','/profile','/settings','/docs']){expect((await page.goto(path)).status()).toBe(200);}
   expect((await page.goto('/admin')).status()).toBe(403);
   expect(errors).toEqual([]);
 });
@@ -108,7 +108,7 @@ test('default administrator can navigate and use buttons before replacing the in
   page.on('pageerror',error=>errors.push(error.message));
   await signIn(page,account);
   await expect(page.locator('[data-initial-password-reminder]')).toBeVisible();
-  const destinations=[['Create VPS','/vps/create'],['My VPS','/vps'],['Console','/vps/console'],
+  const destinations=[['Create VPS','/vps/create'],['My VPS','/vps'],['Console','/vps/console'],['WebSSH','/webssh'],
     ['Profile','/profile'],['Settings','/settings'],['Admin control','/admin'],['Documentation','/docs'],['Overview','/dashboard']];
   for(const [name,destination] of destinations){
     if(testInfo.project.name==='android')await page.getByRole('button',{name:'Toggle navigation'}).click();

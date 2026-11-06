@@ -42,7 +42,7 @@ def main():
     for session in (first, other):
         response = sign_in(session, 'admin123')
         assert response.status_code == 302 and urlsplit(response.headers['Location']).path == '/dashboard'
-    for path in ('/dashboard', '/admin', '/vps/create', '/vps', '/vps/console', '/settings', '/profile', '/docs'):
+    for path in ('/dashboard', '/admin', '/vps/create', '/vps', '/vps/console', '/webssh', '/settings', '/profile', '/docs'):
         response = first.get(base + path, allow_redirects=False, timeout=10)
         assert response.status_code == 200, (path, response.status_code)
         assert 'data-initial-password-reminder' in response.text

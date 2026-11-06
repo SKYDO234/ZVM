@@ -3,9 +3,9 @@ import hashlib
 import json
 import re
 import secrets
-from flask import Blueprint, abort, current_app, jsonify, request
+from flask import Blueprint, abort, current_app, g, jsonify, request
 from engines import EngineError, engine_for
-from extensions import db
+from extensions import db, sock
 from models import AgentInstance, AgentOperation, OSImage
 from services.resource_monitor import host_metrics
 from services.security import encrypt, integer, settings, ssh_key, valid_uuid
@@ -19,6 +19,17 @@ def authenticate():
     supplied = request.headers.get('Authorization', '')
     if not expected or not secrets.compare_digest(supplied.encode('utf-8'), f'Bearer {expected}'.encode('ascii')):
         abort(401)
+    if request.endpoint == 'node_api.webssh':
+        # This is a private machine relay, never a browser cookie endpoint.
+        if request.headers.get('Origin') is not None:
+            abort(403)
+        from services import webssh
+        instance = db.get_or_404(AgentInstance, request.view_args['ident'])
+        try:
+            webssh.validate_spec(instance.spec)
+            g.webssh_lease = webssh.admit(f'node:{instance.spec["owner_id"]}', instance.id)
+        except EngineError:
+            abort(409)
 
 
 @node_api.get('/capabilities')
@@ -31,6 +42,8 @@ def capabilities():
             return 'unknown'
     return jsonify({'protocol_version': 1, 'host': host_metrics(), 'qemu': engine_for('qemu').capabilities(),
                     'docker': engine_for('docker').capabilities(),
+                    'webssh': {'protocol_version': 1, 'available': current_app.config['WEBSSH_ENABLED'] and not current_app.config['TEST_MODE'],
+                               'reason': 'Managed QEMU guests only; requires WebSocket proxy upgrades.'},
                     'instances': [{'id': i.id, 'engine': i.spec['engine'], 'status': state(i)} for i in instances],
                     'reserved_ports': [i.spec['ssh_port'] for i in instances if i.spec.get('ssh_port')],
                     'provisioning': db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status.in_(['queued', 'running', 'uncertain']))),
@@ -138,3 +151,53 @@ def console(ident):
         return jsonify(output=engine.console(instance.spec))
     except EngineError as exc:
         return jsonify(error=str(exc)), 409
+
+
+@node_api.teardown_request
+def release_webssh(_exc):
+    from sqlalchemy.exc import SQLAlchemyError
+    from services.webssh import release
+    lease = g.pop('webssh_lease', None)
+    if lease:
+        try:
+            release(lease)
+        except SQLAlchemyError:
+            db.session.rollback()
+
+
+@sock.route('/instances/<ident>/webssh', bp=node_api)
+def webssh(ws, ident):
+    from simple_websocket import ConnectionClosed
+    from services import webssh as ssh
+    from services.node_webssh import target
+    from services.webssh_access import AccessGuard
+    from services.webssh_socket import BoundedSocket
+    ws = BoundedSocket(ws)
+    first = {}
+    try:
+        raw = ws.receive(timeout=8)
+        if raw is None:
+            raise ssh.SSHError('connect_timeout', 'WebSSH setup timed out.')
+        data = ssh.message(raw)
+        raw = None
+        instance = db.get_or_404(AgentInstance, ident)
+        spec = dict(instance.spec)
+        if data.pop('target', None) != target(spec):
+            raise ssh.SSHError('target_changed', 'External SSH configuration or allocations differ from the panel record. Reconcile before connecting.')
+        first = ssh.connection_message(data)
+        data.clear()
+        authority = AccessGuard(g.webssh_lease, spec, agent=True)
+        def guard():
+            ws.ensure_open()
+            authority()
+        ssh.stream(ws, spec, first, guard)
+    except ConnectionClosed:
+        pass
+    except EngineError as exc:
+        ssh.error(ws, exc)
+    except (ValueError, TypeError, KeyError):
+        ssh.error(ws, ssh.SSHError('invalid_message', 'Invalid WebSSH node message.'))
+    finally:
+        ws.finish()
+        first.get('credentials', {}).clear()
+        first.clear()

@@ -4,7 +4,8 @@ from config import ROOT  # Loads .env without executing it as shell code.
 chdir = str(ROOT)
 bind = f"{os.getenv('SKVM_HOST', '0.0.0.0')}:{int(os.getenv('SKVM_PORT', '31120'))}"
 workers = 2
-threads = 4
+# Leave HTTP capacity available while up to eight bounded WebSSH sessions run.
+threads = 16
 timeout = 60
 accesslog = '-'
 
