@@ -16,7 +16,7 @@ Usage: bash install.sh [--no-start | --background] [--skip-system] [--port PORT]
   --skip-system   Skip apt/Node installation; require Python 3.11+, Node 22+ and npm.
   --port PORT     Override SKVM_PORT/.env for this launch (default port is 31120).
 
-First NEW empty panel only: admin / admin123. Password replacement is mandatory.
+First NEW empty panel only: admin / admin123. Login opens Overview; change the initial password in Profile.
 Existing accounts/data are never reset. Keep Codespaces port visibility Private.
 Set SKVM_BOOTSTRAP_ADMIN=0 before installation to disable default-account creation.
 Stop background panel: .venv/bin/python scripts/serve-panel.py --stop
@@ -173,7 +173,7 @@ fi
 cat <<EOF
 
 SKVM installed. Panel port: $SKVM_PORT (bind: 0.0.0.0).
-NEW empty panel login only: admin / admin123; replace it at first sign-in (12+ characters).
+NEW empty panel login only: admin / admin123; replace it in Profile (12+ characters). Navigation is not locked.
 Existing accounts are NOT reset or replaced. Keep forwarded port visibility Private.
 Data and secrets remain in this workspace. No test users, mock engines or fake guests were created.
 Docker daemon / network / virtualization permissions depend on the host; see the checks above.

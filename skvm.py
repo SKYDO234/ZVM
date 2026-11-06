@@ -80,8 +80,6 @@ def create_app(overrides=None):
         from routes import admin, api, auth, dashboard, vps
         for module in (auth, dashboard, vps, admin, api):
             app.register_blueprint(module.bp)
-        from services.bootstrap import require_password_change
-        app.before_request(require_password_change)
 
     @app.context_processor
     def context():
