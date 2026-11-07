@@ -94,19 +94,25 @@ class NativePanel:
             # or remove timeout while leaving the real SSHX child orphaned. Only
             # the disposable GUEST runs these acceptance commands, never host OS.
             state = f'"$HOME/.local/state/skvm-sshx-{self.ident}"'
-            script = (f'state={state}; '
-                      + ('pid=$(cat "$state/pid"); kill -KILL "$pid"; rm -f "$state/pid"; ' if orphan else '')
+            script = (f'state={state}; pid=$(cat "$state/pid"); '
+                      + 'children=$(cat "/proc/$pid/task/$pid/children"); set -- $children; '
+                      + '[ "$#" = 1 ] || exit 1; client=$1; '
+                      + ('kill -KILL "$pid"; rm -f "$state/pid"; ' if orphan else '')
                       + 'sleep 120 </dev/null >/dev/null 2>&1 & blocker=$!; '
                       + ('' if orphan else 'printf \'%s\n\' "$blocker" > "$state/pid"; ')
-                      + 'printf \'%s\' "$blocker"')
+                      + 'printf \'%s %s\' "$blocker" "$client"')
             response = guest(script)
-            blocker = response.stdout.strip()
-            assert response.returncode == 0 and blocker.isdecimal()
+            numbers = response.stdout.split()
+            assert response.returncode == 0 and len(numbers) == 2 and all(value.isdecimal() for value in numbers)
+            blocker, client_pid = map(int, numbers)
         try:
             self.action('sshx_stop')
             if blocker is not None:
                 response = guest(f'kill -0 {int(blocker)}')
                 assert response.returncode == 0, 'SSHX stop signalled an unrelated guest process.'
+                # Independent OS observation, not just the cleared panel row.
+                response = guest(f'test ! -e /proc/{client_pid}/exe')
+                assert response.returncode == 0, 'The actual SSHX client remained live after Stop SSHX.'
         finally:
             if blocker is not None:
                 guest(f'kill {int(blocker)}')
