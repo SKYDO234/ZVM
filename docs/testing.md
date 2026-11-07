@@ -14,6 +14,7 @@ Console/WebSSH and the WebSocket/xterm implementation have been removed. Their u
 | Locked npm install / asset build | Passed; **0 npm vulnerabilities**; only the existing Browserslist age notice |
 | Ruff undefined/unused-name checks | Passed; rerun with `ruff check --select F .` |
 | Guest shell syntax | All four fixed-script modes parsed with `sh -n`, **without executing their contents on the host** |
+| Production preview after final-source restart | Actual Chromium login, eight authenticated pages, non-blocking reminder, removed terminal routes returning 404, desktop and 412 px mobile without overflow or JavaScript errors; existing accounts/data preserved |
 
 The four native skips are two opt-in Docker cases, missing local QEMU tools, and the opt-in pinned full-OS boot. **These are not four compatibility passes.** This sandbox has no usable QEMU guest or Docker daemon, and its outbound network cannot reach the OS/SSHX distribution hosts. It never installs SSHX on the panel host or inserts a fake production guest/link.
 
@@ -56,7 +57,9 @@ CI uses its installed Playwright Chromium. Where an equipped local Chromium is a
 
 ### Real Ubuntu / QEMU / SSHX
 
-This revision's native SSHX run must pass on an equipped runner before claiming that real feature acceptance. Historical WebSSH CI is not evidence for the replacement. Install native QEMU/cloud-init/OpenSSH tools on a disposable Linux host; do not require KVM or a privileged guest container. Obtain the image checksum using the distribution-provided Ubuntu cloud-image GPG keyring:
+**Passed on an equipped runner:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source `2c874d858a561d0ab2a2ec15b32a90f55099b399`, completed all six jobs successfully. Its full-OS check reported **1 case, 0 failures/errors, 0 skipped**, including actual guest SSHX installation, captured-link display, stop proof and reinstall/orphan checks. This is current SSHX evidence, not historical WebSSH evidence. Later documentation-only commits do not change the tested application/test source.
+
+To reproduce, install native QEMU/cloud-init/OpenSSH tools on a disposable Linux host; do not require KVM or a privileged guest container. Obtain the image checksum using the distribution-provided Ubuntu cloud-image GPG keyring:
 
 ```bash
 .venv/bin/python scripts/qemu-smoke-test.py
@@ -102,7 +105,20 @@ All nine retained catalog URLs are range-read and checked for QCOW2 magic. URL/r
 
 The push/PR `tests.yml` workflow covers Python 3.11/3.12, browser, actual installer/blank QEMU, pinned full-OS SSHX and Docker/TLS-agent acceptance. `acceptance.yml` also supports manually selected equipped tests. Missing tools/checksum/daemon fail opted-in acceptance rather than producing a skipped success. Artifacts expire after seven days and exclude keys/disks/access links.
 
-The merged **pre-SSHX** PR #3 source `4afd4ec35f6b731451232fadb6cf38c418dce8f3` passed all six jobs in [run 42352860733](https://github.com/SKYDO234/ZVM/actions/runs/42352860733). It validated that historical WebSSH/installer/lifecycle source, **not** this replacement. The first SSHX run [42387903374](https://github.com/SKYDO234/ZVM/actions/runs/42387903374), source `129c219`, passed both backend versions, browser, actual installer/blank QEMU, Docker/TLS-agent and all nine image endpoints, but **failed** the full-OS test before SSHX: unconditional cloud-init package updates exceeded 300 seconds under TCG despite the required tools already being installed. The bootstrap was corrected to check first and install only missing dependencies; a new equipped run is required. This failure is not described as SSHX success. Fresh run identity/results must be recorded separately.
+**Current acceptance:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source **`2c874d858a561d0ab2a2ec15b32a90f55099b399`**, concluded **success** on all six jobs:
+
+| Equipped CI job | Result |
+|---|---|
+| Backend Python 3.11 | 321 cases, 0 failures/errors, 4 native skips: **317 passed** |
+| Backend Python 3.12 | 321 cases, 0 failures/errors, 4 native skips: **317 passed** |
+| Browser | **16 passed**, desktop and Android emulation; SSHX sessions remain explicitly synthetic in this job |
+| Actual installer / userspace QEMU | Passed complete installer, fresh verified Node, port-31120 production checks and native blank-disk QEMU tests |
+| Cloud OS / SSHX | **1 real Ubuntu/TCG case passed, 0 failures/errors, 0 skips**; actual guest installer/client, encrypted/displayed output link, pinned management authentication, wrong-PID/unrelated-process/orphan stop checks, persistence/growth/reinstall/deletion |
+| Docker / TLS-agent | **2 native cases passed, 0 failures/errors, 0 skips** |
+
+All **nine catalog endpoints** also passed HTTPS/QCOW2 verification in that run. The full-OS success establishes the named Ubuntu path, not nine successful OS boots. Checks API annotations record `qemu-panel.xml` with one case/no skips, `docker-panel.xml` with two cases/no skips, and both `backend.xml` results; application/test source is identified explicitly so a later documentation-only commit is not mistaken for another native run. No live capability URL/private key is included in this evidence.
+
+**Earlier results, not substituted for current acceptance:** the merged pre-SSHX PR #3 source `4afd4ec35f6b731451232fadb6cf38c418dce8f3` passed all six jobs in [run 42352860733](https://github.com/SKYDO234/ZVM/actions/runs/42352860733). It validated historical WebSSH/installer/lifecycle source, not this replacement. The first SSHX run [42387903374](https://github.com/SKYDO234/ZVM/actions/runs/42387903374), source `129c219`, passed the other five jobs and all nine image endpoints, but **failed** the full-OS test before SSHX: unconditional cloud-init package updates exceeded 300 seconds under TCG despite the required tools already being installed. Source `2c874d8` corrected bootstrap to check first and install only missing dependencies. The subsequent successful run above verifies that correction; the earlier failure remains recorded as a failure.
 
 ## Deployment limits
 

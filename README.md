@@ -4,7 +4,7 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
-**Current revision:** Console/WebSSH have been replaced by **Generate SSHX** on VPS Details, administrator-only provisioning/assignment and a separate user workspace. See [SSHX setup and its external-access security boundary](docs/sshx.md) and [current validation/equipped-host checks](docs/testing.md). Earlier green CI runs describe their exact historical source, not automatic validation of this revision.
+**Current revision:** Console/WebSSH have been replaced by **Generate SSHX** on VPS Details, administrator-only provisioning/assignment and a separate user workspace. See [SSHX setup and its external-access security boundary](docs/sshx.md) and [current validation/equipped-host checks](docs/testing.md). **All six CI jobs passed** for application/test source `2c874d8` in [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), including actual Ubuntu/TCG guest SSHX installation, captured-link display and verified client shutdown. Documentation-only follow-ups do not change that tested source.
 
 ## The uploaded `n.txt` is the reference
 
