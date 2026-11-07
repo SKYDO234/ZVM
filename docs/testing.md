@@ -8,7 +8,7 @@ Console/WebSSH and the WebSocket/xterm implementation have been removed. Their u
 
 | Check | Result and actual scope |
 |---|---|
-| Full Python backend/security/regression suite | **314 passed, 4 skipped, 1 warning in 83.67 s**, Python 3.11; the passlib `crypt` deprecation is shown, not hidden |
+| Full Python backend/security/regression suite | **317 passed, 4 skipped, 1 warning in 76.78 s**, Python 3.11; the passlib `crypt` deprecation is shown, not hidden |
 | Chromium desktop + Pixel 7 emulation | **16 passed in 1.4 minutes**; both ordinary panel flows and SSHX protocol-fixture flows |
 | Focused guest/SSH/node/process safety run | **90 passed in 27.86 s** before the additional enrollment/recovery cases incorporated in the full suite |
 | Locked npm install / asset build | Passed; **0 npm vulnerabilities**; only the existing Browserslist age notice |
@@ -102,7 +102,7 @@ All nine retained catalog URLs are range-read and checked for QCOW2 magic. URL/r
 
 The push/PR `tests.yml` workflow covers Python 3.11/3.12, browser, actual installer/blank QEMU, pinned full-OS SSHX and Docker/TLS-agent acceptance. `acceptance.yml` also supports manually selected equipped tests. Missing tools/checksum/daemon fail opted-in acceptance rather than producing a skipped success. Artifacts expire after seven days and exclude keys/disks/access links.
 
-The merged **pre-SSHX** PR #3 source `4afd4ec35f6b731451232fadb6cf38c418dce8f3` passed all six jobs in [run 42352860733](https://github.com/SKYDO234/ZVM/actions/runs/42352860733). It validated that historical WebSSH/installer/lifecycle source, **not** this replacement. Fresh run identity/results must be recorded separately.
+The merged **pre-SSHX** PR #3 source `4afd4ec35f6b731451232fadb6cf38c418dce8f3` passed all six jobs in [run 42352860733](https://github.com/SKYDO234/ZVM/actions/runs/42352860733). It validated that historical WebSSH/installer/lifecycle source, **not** this replacement. The first SSHX run [42387903374](https://github.com/SKYDO234/ZVM/actions/runs/42387903374), source `129c219`, passed both backend versions, browser, actual installer/blank QEMU, Docker/TLS-agent and all nine image endpoints, but **failed** the full-OS test before SSHX: unconditional cloud-init package updates exceeded 300 seconds under TCG despite the required tools already being installed. The bootstrap was corrected to check first and install only missing dependencies; a new equipped run is required. This failure is not described as SSHX success. Fresh run identity/results must be recorded separately.
 
 ## Deployment limits
 

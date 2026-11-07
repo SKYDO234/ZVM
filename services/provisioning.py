@@ -96,7 +96,10 @@ def queue_action(user, vps, action, extra=None):
             private, public = new_key()
             extra['credentials'] = dict(extra['credentials'], control_public_key=public)
             extra['control_private_key'] = private
-        job = Job(id=str(uuid.uuid4()), owner_id=assignee.id if assignee else user.id, instance_id=vps.id, node_id=vps.node_id,
+        # The assigned owner must be able to poll/view SSHX work requested by an
+        # administrator. The encrypted actor/tag still authorize that requester.
+        job_owner = assignee.id if assignee else (vps.owner_id if action in ('sshx_generate', 'sshx_stop') else user.id)
+        job = Job(id=str(uuid.uuid4()), owner_id=job_owner, instance_id=vps.id, node_id=vps.node_id,
                   kind=action, engine=vps.engine, ram_mb=vps.ram_mb if assignee else 0,
                   vcpus=vps.vcpus if assignee else 0, disk_gb=vps.disk_gb if assignee else growth, payload=encrypt(extra))
         db.session.add(job)

@@ -14,6 +14,7 @@ from engines import EngineError, UncertainError
 from extensions import db
 from models import OSImage
 from services.security import atomic_json, instance_dir, locked, run, settings
+from services.guest_bootstrap import SSHX_DEPENDENCIES
 
 
 class QemuEngine:
@@ -180,7 +181,9 @@ class QemuEngine:
                  'resize_rootfs': True}
         if spec.get('network_restricted', settings()['restrict_guest_network']) is False:
             # Explicit internet-enabled guests prepare the installer prerequisites.
-            cloud['packages'] = ['curl', 'ca-certificates', 'bash', 'tar', 'coreutils', 'util-linux', 'python3']
+            # Do not make already-ready images refresh tens of MiB of indexes
+            # under TCG. This constant guest-only script installs only if needed.
+            cloud['runcmd'] = [['sh', '-c', SSHX_DEPENDENCIES]]
         userdata, metadata = directory / 'user-data', directory / 'meta-data'
         try:
             for path, text in [(userdata, '#cloud-config\n' + yaml.safe_dump(cloud)),

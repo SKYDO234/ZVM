@@ -1,10 +1,12 @@
 """Inspect cloud-init at a replaced ISO-builder boundary, not a guest boot."""
 from pathlib import Path
+import subprocess
 
 import pytest
 import yaml
 
 from engines.qemu_engine import QemuEngine
+from services.guest_bootstrap import SSHX_DEPENDENCIES
 from services.guest_ssh import new_key
 from services.security import instance_dir
 from tests.test_provisioning import spec
@@ -30,7 +32,13 @@ def test_seed_preserves_owner_key_adds_unique_control_key_and_only_explicit_inte
     assert observed['users'][0]['ssh_authorized_keys'] == [owner, public]
     assert observed['disable_root'] is True and observed['ssh_pwauth'] is False
     if restricted:
-        assert 'packages' not in observed
+        assert 'packages' not in observed and 'runcmd' not in observed
     else:
-        assert set(observed['packages']) == {'curl', 'ca-certificates', 'bash', 'tar', 'coreutils', 'util-linux', 'python3'}
+        assert 'packages' not in observed  # No unconditional index refresh/upgrade.
+        assert observed['runcmd'] == [['sh', '-c', SSHX_DEPENDENCIES]]
+        assert SSHX_DEPENDENCIES.index('if ready; then') < SSHX_DEPENDENCIES.index('apt-get -o')
+        assert 'pidfd_open' in SSHX_DEPENDENCIES and 'dnf --setopt=timeout=20' in SSHX_DEPENDENCIES
+        assert 'sshx.io/get' not in SSHX_DEPENDENCIES  # Only Generate installs SSHX.
+        syntax = subprocess.run(['sh', '-n'], input=SSHX_DEPENDENCIES, text=True, capture_output=True, timeout=5)
+        assert syntax.returncode == 0, syntax.stderr
     assert not (directory / 'user-data').exists() and not (directory / 'meta-data').exists()

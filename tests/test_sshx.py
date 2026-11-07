@@ -331,14 +331,19 @@ def test_cross_worker_admission_and_rate_limit(app, users):
             pytest.fail('Rate limit bypassed.')
 
 
-def test_admin_actor_cannot_be_deleted_while_working_for_another_owner(client, users, monkeypatch):
+@pytest.mark.parametrize('kind', ['create', 'sshx_generate'])
+def test_admin_actor_cannot_be_deleted_while_working_for_another_owner(client, users, monkeypatch, kind):
     # Add a second administrator, since self-deletion is independently prohibited.
     actor = User(name='Other operator', email='other-operator@example.test', role='admin')
     actor.set_password('Other-operator-password!')
     db.session.add(actor)
     db.session.commit()
     monkeypatch.setattr('services.provisioning.capacity_check', lambda *a, **kw: None)
-    queue_create(actor, spec(users[0]), {})
+    if kind == 'create':
+        queue_create(actor, spec(users[0]), {})
+    else:
+        instance = vm(users[0]); access(instance)
+        queue_action(actor, instance, kind)
     signin(client, users[2].email)
     response = post(client, f'/admin/users/{actor.id}/delete', {'confirmation': actor.email})
     assert response.status_code == 302 and db.session.get(User, actor.id) is not None
@@ -392,3 +397,18 @@ def test_unproven_engine_stop_cannot_retire_an_external_access_link(users):
         _apply_result(job, {'spec': instance.spec()}, {'status': 'running'})
     assert db.session.get(SSHXSession, instance.id).state == 'generated'
     assert visible_session(instance)['link'] == SYNTHETIC_LINK
+
+
+@pytest.mark.parametrize('kind', ['sshx_generate', 'sshx_stop'])
+def test_assigned_owner_can_poll_admin_requested_sshx_without_exposing_it_to_others(client, users, kind):
+    instance = vm(users[0]); access(instance)
+    job = queue_action(users[2], instance, kind)
+    assert job.owner_id == users[0].id and decrypt(job.payload)['actor_id'] == users[2].id
+    signin(client)
+    assert client.get(f'/vps/jobs/{job.id}').status_code == 200
+    status = client.get(f'/api/jobs/{job.id}')
+    assert status.status_code == 200 and status.json['status'] == 'queued'
+    assert 'payload' not in status.json and 'link' not in status.json
+    outsider = client.application.test_client(); signin(outsider, users[1].email)
+    assert outsider.get(f'/api/jobs/{job.id}').status_code == 404
+    assert outsider.get(f'/vps/jobs/{job.id}').status_code == 404
