@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='skvm-browser-') as directory:
             user=User(name='Isolated '+label,email=email,role='admin' if kind in ('admin','bootstrap') else 'user',
                       must_change_password=kind=='bootstrap')
             user.set_password(password);db.session.add(user);db.session.flush()
-            account={'id':user.id,'email':user.email,'password':password}
+            account={'id':user.id,'email':user.email,'password':password,'role':user.role}
             if project:credentials[kind][project]=account
             else:credentials[kind]=account
         db.session.commit()

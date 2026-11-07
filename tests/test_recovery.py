@@ -1,6 +1,7 @@
 """Read-only recovery uses explicit mocked OS boundaries, never real guests."""
 import copy
 import json
+import hashlib
 import uuid
 from unittest.mock import Mock
 import pytest
@@ -181,10 +182,10 @@ def test_lost_commit_ack_does_not_downgrade_durable_completion(users,monkeypatch
         row=AgentOperation(id=ident,digest='isolated-commit-test',payload=encrypt({'kind':'create','spec':data,'credentials':{}}))
     else:
         row=Job(id=ident,owner_id=users[0].id,instance_id=data['id'],kind='create',engine='qemu',ram_mb=2048,vcpus=2,disk_gb=20,
-                payload=encrypt({'spec':data,'credentials':{}}))
+                payload=encrypt({'spec':data,'credentials':{},'actor_id':users[2].id}))
     db.session.add(row);db.session.commit()
     module='services.node_worker' if agent else 'services.provisioning'
-    monkeypatch.setattr(module+'.engine_for',lambda *a:Mock(create=lambda *a,**kw:{'runtime':{'test_boundary':True},'status':'stopped','ssh_port':22555}))
+    monkeypatch.setattr(module+'.engine_for',lambda *a:Mock(create=lambda s,c,**kw:{'runtime':{'test_boundary':True, **({'control_key_sha256':hashlib.sha256(c['control_public_key'].encode()).hexdigest()} if c.get('control_public_key') else {})},'status':'stopped','ssh_port':22555}))
     if agent:monkeypatch.setattr(module+'.enforce_capacity',lambda *a,**kw:None)
     else:
         monkeypatch.setattr(module+'.capacity_check',lambda *a,**kw:None)

@@ -149,13 +149,30 @@
   const drawer=$('#activity-drawer');
   $('#notifications-toggle')?.addEventListener('click',async()=>{drawer.hidden=!drawer.hidden;if(drawer.hidden)return;try{const rows=await api('/api/activity');const root=$('#activity-items');root.replaceChildren();if(!rows.length)root.textContent='No activity recorded yet.';for(const row of rows){const el=document.createElement('div');el.className='drawer-item';const text=document.createElement('span');text.textContent=row.message;const date=document.createElement('small');date.textContent=new Date(row.at).toLocaleString();el.append(text,date);root.append(el);}}catch(error){$('#activity-items').textContent=error.message;}});
   $('#close-activity')?.addEventListener('click',()=>drawer.hidden=true);
-  const terminal=$('[data-console-id]');
-  $('#console-instance-select')?.addEventListener('change',e=>{if(e.target.value.startsWith('/vps/'))location.assign(e.target.value);});
-  if(terminal){
-    const path='/api/vps/'+terminal.dataset.consoleId+'/console';let diagnostic='', consoleBusy=false;
-    const strip=text=>text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g,'').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'');
-    const load=async()=>{if(consoleBusy)return;consoleBusy=true;try{const data=await api(path);const output=$('#console-output');const bottom=output.scrollTop+output.clientHeight>=output.scrollHeight-50;output.textContent=strip(data.output)+(diagnostic?'\n\n—— Diagnostic result ——\n'+diagnostic:'');if(bottom)output.scrollTop=output.scrollHeight;}catch(error){$('#console-output').textContent=error.message;}finally{consoleBusy=false;}};
-    $('#console-refresh')?.addEventListener('click',load);load();setInterval(()=>{if(!document.hidden)load();},4000);
-    $('#console-input-form').addEventListener('submit',async e=>{e.preventDefault();const input=$('#console-input');const button=$('button',e.target);button.disabled=true;try{const data=await api(path,{method:'POST',body:JSON.stringify({input:input.value})});if(terminal.dataset.consoleEngine==='docker')diagnostic=strip(data.output)+'\nExit code: '+data.exit_code;else input.value='';await load();}catch(error){toast(error.message,'error');}finally{button.disabled=false;}});
+  const enrollMethod = document.getElementById('enroll-method');
+  if (enrollMethod) {
+    const update = () => {
+      const key = enrollMethod.value === 'key';
+      for (const [selector, active] of [['[data-enroll-password]', !key], ['[data-enroll-key]', key]]) {
+        const section = document.querySelector(selector); section.hidden = !active;
+        section.querySelectorAll('input,textarea').forEach(field => { field.disabled = !active; field.required = active && field.name !== 'passphrase'; });
+      }
+    };
+    enrollMethod.addEventListener('change', update); update();
+  }
+  const sshxTask = document.querySelector('[data-sshx-job]');
+  if (sshxTask) {
+    let timer;
+    const poll = async () => {
+      if (document.hidden) return;
+      try {
+        const data = await api('/api/jobs/' + sshxTask.dataset.sshxJob);
+        if (!['queued','running'].includes(data.status)) {
+          clearInterval(timer);
+          if (data.status !== sshxTask.dataset.initialStatus) location.reload();
+        }
+      } catch (error) { clearInterval(timer); toast(error.message, 'error'); }
+    };
+    timer = setInterval(poll, 2000); poll();
   }
 })();

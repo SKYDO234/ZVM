@@ -1,5 +1,6 @@
 """Audited Python replacement for n.txt: independent disks, TCG, cloud-init, exact PIDs."""
 import json
+import hashlib
 import os
 import shutil
 import socket
@@ -152,8 +153,10 @@ class QemuEngine:
                 run(['qemu-img', 'resize', '-f', 'qcow2', directory / 'disk.qcow2', f'{spec["disk_gb"]}G'])
                 self._seed(spec, credentials)
                 runtime = {'accel': capability['accel'], 'storage_enforced': True,
-                           'network_restricted': settings()['restrict_guest_network'],
+                           'network_restricted': spec.get('network_restricted', settings()['restrict_guest_network']),
                            'forwards': spec.get('forwards', []), 'provisioned': True}
+                if credentials.get('control_public_key'):
+                    runtime['control_key_sha256'] = hashlib.sha256(credentials['control_public_key'].encode()).hexdigest()
                 spec['runtime'] = runtime
                 atomic_json(directory / 'config.json', spec)
             except Exception:
@@ -166,14 +169,18 @@ class QemuEngine:
         directory = instance_dir(spec['id'])
         user = {'name': spec['username'], 'sudo': 'ALL=(ALL) NOPASSWD:ALL', 'shell': '/bin/bash',
                 'lock_passwd': not bool(credentials.get('password_hash'))}
-        if credentials.get('public_key'):
-            user['ssh_authorized_keys'] = [credentials['public_key']]
+        keys = [credentials[k] for k in ('public_key', 'control_public_key') if credentials.get(k)]
+        if keys:
+            user['ssh_authorized_keys'] = keys
         if credentials.get('password_hash'):
             user['passwd'] = credentials['password_hash']
         cloud = {'hostname': spec['name'].lower(), 'manage_etc_hosts': True, 'disable_root': True,
                  'ssh_pwauth': bool(credentials.get('password_hash')), 'users': [user],
                  'chpasswd': {'expire': False}, 'growpart': {'mode': 'auto', 'devices': ['/'], 'ignore_growroot_disabled': False},
                  'resize_rootfs': True}
+        if spec.get('network_restricted', settings()['restrict_guest_network']) is False:
+            # Explicit internet-enabled guests prepare the installer prerequisites.
+            cloud['packages'] = ['curl', 'ca-certificates', 'bash', 'tar', 'coreutils', 'util-linux', 'python3']
         userdata, metadata = directory / 'user-data', directory / 'meta-data'
         try:
             for path, text in [(userdata, '#cloud-config\n' + yaml.safe_dump(cloud)),
@@ -189,7 +196,7 @@ class QemuEngine:
 
     def _command(self, spec, accel):
         directory = instance_dir(spec['id'])
-        if len(str(directory / 'serial.sock').encode()) > 100:
+        if len(str(directory / 'qmp.sock').encode()) > 100:
             raise EngineError('Workspace path is too long for Unix sockets; use a shorter SKVM_DATA_DIR.')
         runtime = spec.get('runtime', {})
         forwards = [f'hostfwd=tcp:127.0.0.1:{spec["ssh_port"]}-:22']
@@ -199,8 +206,7 @@ class QemuEngine:
                 '-m', str(spec['ram_mb']), '-smp', str(spec['vcpus']), '-cpu', 'host' if accel == 'kvm' else 'max',
                 '-machine', f'type=pc,accel={accel}', '-display', 'none', '-S', '-monitor', 'none',
                 '-qmp', f'unix:{directory / "qmp.sock"},server=on,wait=off',
-                '-chardev', f'socket,id=serial0,path={directory / "serial.sock"},server=on,wait=off,logfile={directory / "serial.log"},logappend=on',
-                '-serial', 'chardev:serial0',
+                '-serial', f'file:{directory / "serial.log"}',
                 '-drive', f'file={directory / "disk.qcow2"},format=qcow2,if=virtio',
                 '-drive', f'file={directory / "seed.iso"},format=raw,if=virtio,readonly=on',
                 '-boot', 'order=c', '-device', 'virtio-net-pci,netdev=net0',
@@ -359,10 +365,10 @@ class QemuEngine:
         and live QMP state. Call again after key exchange, before SSH auth.
         """
         if current_app.config['TEST_MODE']:
-            raise EngineError('WebSSH cannot connect to real guests in test mode.')
+            raise EngineError('Guest SSH cannot connect in test mode.')
         process = self._process(spec)
         if not process:
-            raise EngineError('The managed QEMU VM is not running. Start it first; use Console to inspect boot progress.')
+            raise EngineError('The managed QEMU VM is not running. Start it first and wait for guest SSH to boot.')
         port = spec.get('ssh_port')
         if type(port) is not int or not 1024 <= port <= 65535:
             raise EngineError('The VM has no valid managed SSH forward.')
@@ -378,30 +384,37 @@ class QemuEngine:
         except (psutil.NoSuchProcess, psutil.AccessDenied, OSError) as exc:
             raise EngineError('Cannot verify the QEMU-owned SSH listener. Check process permissions on its node.') from exc
         if self._qmp(spec, 'query-status').get('running') is not True:
-            raise EngineError('The QEMU guest is paused or not running. Resume/start it before using WebSSH.')
+            raise EngineError('The QEMU guest is paused or not running. Resume/start it before generating SSHX.')
         return '127.0.0.1', port
 
-    def console(self, spec):
-        path = instance_dir(spec['id']) / 'serial.log'
-        if not path.exists():
-            return 'No serial output yet. Start the VM to begin booting.'
-        with path.open('rb') as f:
-            f.seek(max(0, path.stat().st_size - 32768))
-            return f.read(32768).decode(errors='replace')
+    def assign(self, spec, owner_id, **_):
+        from services.security import integer
+        owner_id = integer(owner_id, 'Assigned account', 1, 2**31 - 1)
+        with locked(f'vm-{spec["id"]}'):
+            self._ensure_disk_idle(spec)
+            path = instance_dir(spec['id']) / 'config.json'
+            if path.is_symlink() or not path.is_file():
+                raise EngineError('The managed VM manifest is unavailable or unsafe.')
+            saved = json.loads(path.read_text())
+            if any(saved.get(k) != spec.get(k) for k in ('id', 'owner_id', 'engine', 'username', 'ssh_port')):
+                raise EngineError('The managed VM manifest identity does not match.')
+            atomic_json(path, saved | {'owner_id': owner_id})
+            return {'status': 'stopped', 'owner_id': owner_id}
 
-    def console_input(self, spec, text):
-        if not self._process(spec):
-            raise EngineError('The VM is not running.')
-        if not isinstance(text, str) or not 1 <= len(text) <= 1024 or '\x00' in text:
-            raise EngineError('Console input must be 1–1024 characters without NUL.')
-        try:
-            with socket.socket(socket.AF_UNIX) as sock:
-                sock.settimeout(3)
-                sock.connect(str(instance_dir(spec['id']) / 'serial.sock'))
-                sock.sendall((text + '\r').encode())
-        except OSError as exc:
-            raise EngineError('Guest serial socket unavailable; another console may be attached.') from exc
-        return {'output': 'Input delivered to the guest serial port (never executed on the host).'}
+    def network(self, spec, restricted, **_):
+        if type(restricted) is not bool:
+            raise EngineError('Choose restricted networking or outbound internet.')
+        with locked(f'vm-{spec["id"]}'):
+            self._ensure_disk_idle(spec)
+            path = instance_dir(spec['id']) / 'config.json'
+            if path.is_symlink() or not path.is_file():
+                raise EngineError('The managed VM manifest is unavailable or unsafe.')
+            saved = json.loads(path.read_text())
+            if any(saved.get(k) != spec.get(k) for k in ('id', 'owner_id', 'engine', 'username', 'ssh_port')):
+                raise EngineError('The managed VM manifest identity does not match.')
+            runtime = dict(spec.get('runtime', {}), network_restricted=restricted)
+            atomic_json(path, saved | {'runtime': runtime, 'network_restricted': restricted})
+            return {'status': 'stopped', 'runtime': runtime}
 
     def reinstall(self, spec, credentials, **_):
         # The controller holds the per-instance control lock. Old storage is retained until preparation succeeds.

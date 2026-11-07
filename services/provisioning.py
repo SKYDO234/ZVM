@@ -1,12 +1,17 @@
 import logging
+import hashlib
 import threading
 import uuid
 from flask import current_app
 from engines import EngineError, UncertainError, engine_for
 from extensions import db
-from models import Job, Node, User, VPS
+from models import GuestAccess, Job, Node, SSHXSession, User, VPS
+from models.user import utcnow
 from services.security import audit, decrypt, encrypt, integer, locked, safe_message, settings
 from services.validation import capacity_check, quota_check
+from services.guest_ssh import admission, new_key
+from services.guest_access import GuestGuard
+from services import sshx
 
 ACTIVE_JOBS = ['queued', 'running', 'uncertain']
 
@@ -14,14 +19,24 @@ ACTIVE_JOBS = ['queued', 'running', 'uncertain']
 def queue_create(user, spec, credentials, node=None):
     if current_app.config['TEST_MODE']:
         raise EngineError('Test mode does not provision or create VPS records.')
+    if not user.enabled or not user.is_admin:
+        raise EngineError('Only administrators can create and assign instances.')
+    owner = db.session.get(User, spec.get('owner_id'))
+    if not owner or not owner.enabled:
+        raise EngineError('Select an enabled account to own this instance.')
     with locked('allocation'):
-        quota_check(user, spec)
+        quota_check(owner, spec)
         capacity_check(spec, node)
-        job = Job(id=str(uuid.uuid4()), owner_id=user.id, instance_id=spec['id'], node_id=node.id if node else None,
+        credentials = dict(credentials)
+        payload = {'spec': spec, 'credentials': credentials, 'actor_id': user.id, 'actor_tag': user.get_id()}
+        if spec['engine'] == 'qemu':
+            private, credentials['control_public_key'] = new_key()
+            payload['control_private_key'] = private
+        job = Job(id=str(uuid.uuid4()), owner_id=owner.id, instance_id=spec['id'], node_id=node.id if node else None,
                   kind='create', engine=spec['engine'], ram_mb=spec['ram_mb'], vcpus=spec['vcpus'], disk_gb=spec['disk_gb'],
-                  payload=encrypt({'spec': spec, 'credentials': credentials}))
+                  payload=encrypt(payload))
         db.session.add(job)
-        audit('provision.queued', f'Provisioning {spec["name"]} with {spec["engine"]}.', user.id, spec['id'])
+        audit('provision.queued', f'Provisioning {spec["name"]} with {spec["engine"]}; assigned account ID {owner.id}.', user.id, spec['id'])
         db.session.commit()
         return job
 
@@ -29,16 +44,23 @@ def queue_create(user, spec, credentials, node=None):
 def queue_action(user, vps, action, extra=None):
     if current_app.config['TEST_MODE']:
         raise EngineError('Test mode: lifecycle mutations are disabled.')
-    if action not in ('start', 'stop', 'restart', 'force_stop', 'delete', 'resize', 'suspend', 'unsuspend', 'reinstall'):
+    if not user.enabled or (vps.owner_id != user.id and not user.is_admin):
+        raise EngineError('Instance ownership check failed.')
+    if action not in ('start', 'stop', 'restart', 'force_stop', 'delete', 'resize', 'suspend', 'unsuspend', 'reinstall', 'network', 'assign', 'sshx_generate', 'sshx_stop'):
         raise EngineError('Unsupported action.')
-    if vps.suspended and action in ('start', 'restart', 'reinstall'):
+    if vps.suspended and action in ('start', 'restart', 'reinstall', 'sshx_generate'):
         raise EngineError('This instance is suspended. Contact an administrator.')
-    if action in ('suspend', 'unsuspend') and not user.is_admin:
+    if action in ('suspend', 'unsuspend', 'network', 'assign') and not user.is_admin:
         raise EngineError('An administrator role is required.')
     with locked('allocation'):
-        if db.session.scalar(db.select(Job.id).where(Job.instance_id == vps.id, Job.status.in_(ACTIVE_JOBS))):
+        active = list(db.session.scalars(db.select(Job).where(Job.instance_id == vps.id, Job.status.in_(ACTIVE_JOBS))))
+        # A proven VM shutdown safely ends even an unreported SSHX client. Never
+        # relax locks/reservations for uncertain create/storage/lifecycle work.
+        if any(not (j.status == 'uncertain' and j.kind in ('sshx_generate', 'sshx_stop')
+                    and action in ('stop', 'force_stop', 'suspend')) for j in active):
             raise EngineError('An active or uncertain job already exists for this instance. Wait or ask an administrator to reconcile it.')
         extra = dict(extra or {})
+        extra.update(actor_id=user.id, actor_tag=user.get_id())
         extra.setdefault('spec', vps.spec())  # Preserve identity for safe delete/crash inspection.
         growth = 0
         if action == 'resize':
@@ -49,8 +71,34 @@ def queue_action(user, vps, action, extra=None):
             proposed = vps.spec() | {'disk_gb': size}
             quota_check(vps.owner, proposed, resize_of=vps)
             capacity_check(proposed, vps.node, resize_of=vps, require_available_ram=False)
-        job = Job(id=str(uuid.uuid4()), owner_id=user.id, instance_id=vps.id, node_id=vps.node_id,
-                  kind=action, engine=vps.engine, disk_gb=growth, payload=encrypt(extra))
+        assignee = None
+        if action == 'assign':
+            if extra.get('guest_credentials_reviewed') is not True:
+                raise EngineError('Review guest credentials before reassignment: existing native SSH keys/passwords are not rotated automatically.')
+            ident = integer(extra.get('owner_id'), 'Assigned account', 1, 2**31 - 1)
+            assignee = db.session.get(User, ident)
+            if not assignee or not assignee.enabled or assignee.id == vps.owner_id:
+                raise EngineError('Select a different enabled owner.')
+            if vps.engine != 'qemu':
+                raise EngineError('Existing-instance reassignment currently requires a stopped QEMU VM.')
+            quota_check(assignee, vps.spec() | {'owner_id': assignee.id})
+            extra['owner_id'] = assignee.id
+        if action == 'network':
+            if vps.engine != 'qemu' or type(extra.get('network_restricted')) is not bool:
+                raise EngineError('Choose a network policy for a stopped QEMU VM.')
+        if action in ('sshx_generate', 'sshx_stop'):
+            sshx.validate_spec(vps.spec())
+            if not db.session.get(GuestAccess, vps.id):
+                raise EngineError('Complete one-time SSHX enrollment for this existing VM first.')
+            if action == 'sshx_generate' and vps.runtime.get('network_restricted', True):
+                raise EngineError('An administrator must explicitly enable guest outbound internet while this VM is stopped.')
+        if action == 'reinstall' and vps.engine == 'qemu':
+            private, public = new_key()
+            extra['credentials'] = dict(extra['credentials'], control_public_key=public)
+            extra['control_private_key'] = private
+        job = Job(id=str(uuid.uuid4()), owner_id=assignee.id if assignee else user.id, instance_id=vps.id, node_id=vps.node_id,
+                  kind=action, engine=vps.engine, ram_mb=vps.ram_mb if assignee else 0,
+                  vcpus=vps.vcpus if assignee else 0, disk_gb=vps.disk_gb if assignee else growth, payload=encrypt(extra))
         db.session.add(job)
         audit(f'{action}.queued', f'{action.replace("_", " ").title()} requested for {vps.name}.', user.id, vps.id)
         db.session.commit()
@@ -58,6 +106,20 @@ def queue_action(user, vps, action, extra=None):
 
 
 def _apply_result(job, payload, result):
+    if not isinstance(result, dict):
+        raise UncertainError('The engine returned no verified operation result.')
+    expected = {'start': 'running', 'restart': 'running', 'stop': 'stopped', 'force_stop': 'stopped',
+                'suspend': 'stopped', 'delete': 'deleted', 'reinstall': 'stopped', 'network': 'stopped', 'assign': 'stopped'}
+    if job.kind in expected and result.get('status') != expected[job.kind]:
+        raise UncertainError('The engine result did not prove the requested guest state. No tunnel revocation was claimed.')
+    if job.kind == 'assign' and result.get('owner_id') != payload['owner_id']:
+        raise UncertainError('The engine did not prove the selected ownership assignment.')
+    if job.kind == 'network' and result.get('runtime', {}).get('network_restricted') is not payload['network_restricted']:
+        raise UncertainError('The engine did not prove the selected guest network policy.')
+    if job.kind in ('create', 'reinstall') and payload.get('control_private_key'):
+        public = payload['credentials']['control_public_key']
+        if result.get('runtime', {}).get('control_key_sha256') != hashlib.sha256(public.encode()).hexdigest():
+            raise UncertainError('Provisioning did not prove the new management public key was included in the guest seed. Pending encrypted key retained for recovery.')
     if job.kind == 'create':
         spec = payload['spec']
         if not result.get('runtime') or not result.get('status'):
@@ -66,10 +128,25 @@ def _apply_result(job, payload, result):
             vps = VPS(**{k: spec[k] for k in ('id', 'owner_id', 'name', 'engine', 'os_id', 'ram_mb', 'vcpus', 'disk_gb', 'username')},
                       node_id=job.node_id, runtime=result['runtime'], ssh_port=result.get('ssh_port'))
             db.session.add(vps)
+            db.session.flush()
+        if payload.get('control_private_key') and not db.session.get(GuestAccess, spec['id']):
+            db.session.add(GuestAccess(instance_id=spec['id'], private_key_encrypted=encrypt({'private_key': payload['control_private_key']})))
     else:
         vps = db.session.get(VPS, job.instance_id)
         if vps:
-            if job.kind == 'delete':
+            if job.kind in ('start', 'stop', 'restart', 'force_stop', 'suspend', 'delete', 'reinstall', 'network', 'assign'):
+                sshx.retire(vps.id)
+                if job.kind in ('stop', 'force_stop', 'suspend', 'delete'):
+                    for old in db.session.scalars(db.select(Job).where(Job.instance_id == vps.id, Job.kind.in_(['sshx_generate', 'sshx_stop']), Job.status == 'uncertain')):
+                        old.status, old.payload = 'failed', None
+                        old.message = 'VM shutdown proved the guest SSHX client cannot remain running.'
+            if job.kind == 'sshx_generate':
+                sshx.save_session(vps, job.id, result, payload.get('sshx_started_at'))
+            elif job.kind == 'sshx_stop':
+                sshx.retire(vps.id)
+            elif job.kind == 'assign':
+                vps.owner_id = payload['owner_id']
+            elif job.kind == 'delete':
                 db.session.delete(vps)
             elif job.kind == 'suspend':
                 vps.suspended = True
@@ -83,6 +160,13 @@ def _apply_result(job, payload, result):
                 vps.username = spec['username']
                 vps.runtime = result['runtime']
                 vps.ssh_port = result.get('ssh_port')
+                if payload.get('control_private_key'):
+                    access = db.session.get(GuestAccess, vps.id)
+                    if access is None:
+                        access = GuestAccess(instance_id=vps.id)
+                        db.session.add(access)
+                    access.private_key_encrypted = encrypt({'private_key': payload['control_private_key']})
+                    access.host_fingerprint = None
             if result.get('runtime') and job.kind != 'delete':
                 vps.runtime = result['runtime']
     job.status, job.payload = 'completed', None
@@ -90,7 +174,7 @@ def _apply_result(job, payload, result):
         job.message = f"Provisioned successfully; current engine state: {result['status']}."
     else:
         job.message = f"{job.kind.replace('_', ' ').title()} completed."
-    audit(f'{job.kind}.completed', job.message, job.owner_id, job.instance_id)
+    audit(f'{job.kind}.completed', job.message, payload.get('actor_id', job.owner_id), job.instance_id)
     db.session.commit()
 
 
@@ -103,9 +187,13 @@ def process_job(job_id):
         payload = decrypt(job.payload)
         job.status, job.message = 'running', 'Validating configuration and provisioning with the real engine…'
         db.session.commit()
-        user = db.session.get(User, job.owner_id)
+        user = db.session.get(User, payload.get('actor_id', job.owner_id))
         if not user or not user.enabled:
             raise EngineError('The requesting user is disabled.')
+        if payload.get('actor_tag') and user.get_id() != payload['actor_tag']:
+            raise EngineError('The requesting account/session changed after this operation was queued.')
+        if job.kind in ('create', 'assign') and not user.is_admin:
+            raise EngineError('Only administrators can create or assign instances, including queued operations.')
         node = db.session.get(Node, job.node_id) if job.node_id else None
         engine = engine_for(job.engine, node)
         # Capacity reservations live in Job rows. Keep the global lock short during large downloads.
@@ -117,12 +205,19 @@ def process_job(job_id):
                     raise EngineError('Test mode: no real resources or VPS records are created.')
                 if job.kind == 'create':
                     spec = payload['spec']
-                    quota_check(user, spec, exclude_job=job.id)
+                    owner = db.session.get(User, spec['owner_id'])
+                    if not owner or not owner.enabled or owner.id != job.owner_id:
+                        raise EngineError('The assigned account is disabled or the quota owner changed.')
+                    quota_check(owner, spec, exclude_job=job.id)
                     capacity_check(spec, node, exclude_job=job.id)
                     if job.engine == 'qemu' and not spec['ssh_port']:
                         spec['ssh_port'] = allocate_port(node, exclude_ports=[p['host'] for p in spec.get('forwards', [])])
                     validate_ports(spec, node)
                     payload['spec'] = spec
+                    if job.engine == 'qemu' and not payload.get('control_private_key'):
+                        private, public = new_key()
+                        payload['control_private_key'] = private
+                        payload['credentials'] = dict(payload.get('credentials', {}), control_public_key=public)
                     job.payload = encrypt(payload)
                     db.session.commit()
                 else:
@@ -131,20 +226,47 @@ def process_job(job_id):
                         raise EngineError('The instance no longer exists.')
                     if vps.owner_id != user.id and not user.is_admin:
                         raise EngineError('Instance ownership check failed.')
-                    if vps.suspended and job.kind in ('start', 'restart', 'reinstall'):
+                    if vps.suspended and job.kind in ('start', 'restart', 'reinstall', 'sshx_generate'):
                         raise EngineError('The instance is suspended.')
                     spec = vps.spec()
                     if job.kind in ('start', 'restart'):
                         capacity_check(spec, node, resize_of=vps, require_available_ram=job.kind != 'restart')
-                    if job.kind in ('suspend', 'unsuspend') and not user.is_admin:
+                    if job.kind in ('suspend', 'unsuspend', 'network', 'assign') and not user.is_admin:
                         raise EngineError('An administrator role is required.')
-            with (locked('allocation') if job.kind == 'resize' else nullcontext()):
+                    if job.kind == 'assign':
+                        owner = db.session.get(User, payload['owner_id'])
+                        if not owner or not owner.enabled or owner.id != job.owner_id:
+                            raise EngineError('The assigned account is disabled or changed.')
+                        quota_check(owner, spec | {'owner_id': owner.id}, exclude_job=job.id)
+            with (locked('allocation') if job.kind in ('resize', 'assign') else nullcontext()):
                 if job.kind == 'resize':
                     new_spec = spec | {'disk_gb': payload['disk_gb']}
                     quota_check(vps.owner, new_spec, resize_of=vps, exclude_job=job.id)
                     capacity_check(new_spec, node, resize_of=vps, exclude_job=job.id, require_available_ram=False)
                 mutated = True
-                if job.kind == 'create':
+                if job.kind in ('sshx_generate', 'sshx_stop'):
+                    payload['sshx_started_at'] = utcnow().isoformat()
+                    job.payload = encrypt(payload)
+                    db.session.commit()
+                    private, pin = sshx.stored_access(spec['id'])
+                    guard = GuestGuard(spec, user, node)
+                    previous = db.session.get(SSHXSession, spec['id'])
+                    if previous:
+                        previous.state = 'uncertain'  # Hiding a link is NOT claiming it was revoked.
+                        db.session.commit()
+                    with admission(f'user:{user.id}', spec['id']):
+                        result = sshx.dispatch(spec, 'generate' if job.kind == 'sshx_generate' else 'stop', node=node,
+                                               private=private, host_fingerprint=pin, operation_id=job.id,
+                                               seconds=current_app.config['SSHX_MAX_SECONDS'], check=guard)
+                    try:
+                        guard(force=True)
+                    except EngineError:
+                        raise UncertainError('Authority changed after an SSHX guest operation. Inspect its outcome or stop the VM.') from None
+                elif job.kind == 'assign':
+                    result = engine.assign(spec, payload['owner_id'], operation_id=job.id)
+                elif job.kind == 'network':
+                    result = engine.network(spec, payload['network_restricted'], operation_id=job.id)
+                elif job.kind == 'create':
                     result = engine.create(spec, payload['credentials'], operation_id=job.id)
                 elif job.kind == 'restart' and node is None:
                     engine.stop(spec, operation_id=job.id)
@@ -162,7 +284,7 @@ def process_job(job_id):
                     result = engine.reinstall(payload['spec'], payload['credentials'], operation_id=job.id)
                 else:
                     result = getattr(engine, job.kind)(spec, operation_id=job.id)
-                if job.kind == 'resize':
+                if job.kind in ('resize', 'assign'):
                     _apply_result(job, payload, result)
                 else:
                     with locked('allocation'):
@@ -231,6 +353,25 @@ def reconcile_job(job):
         if not job.payload:
             raise EngineError('The original operation context is unavailable. Manual inspection is required.')
         payload = decrypt(job.payload)
+        if job.kind in ('sshx_generate', 'sshx_stop'):
+            instance = db.session.get(VPS, job.instance_id)
+            if not instance:
+                raise EngineError('The original VM no longer exists.')
+            spec = instance.spec()
+            node = db.session.get(Node, job.node_id) if job.node_id else None
+            engine = engine_for(job.engine, node)
+            if engine.metrics(spec).get('status') == 'stopped':
+                sshx.retire(instance.id)
+                job.status, job.payload, job.message = 'failed', None, 'The VM is proven stopped; no SSHX client can remain running.'
+                db.session.commit()
+                return
+            private, pin = sshx.stored_access(instance.id)
+            with admission('reconcile:sshx', instance.id):
+                result = sshx.dispatch(spec, 'inspect' if job.kind == 'sshx_generate' else 'inspect_stop', node=node, private=private, host_fingerprint=pin,
+                                       operation_id=job.id, seconds=current_app.config['SSHX_MAX_SECONDS'])
+            with locked('allocation'):
+                _apply_result(job, payload, result)
+            return
         if job.node_id:
             node = db.session.get(Node, job.node_id)
             engine = engine_for(job.engine, node)

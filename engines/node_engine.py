@@ -17,7 +17,7 @@ class NodeEngine:
     def __init__(self, node):
         self.node = node
 
-    def _request(self, method, path, payload=None, missing_ok=False):
+    def _request(self, method, path, payload=None, missing_ok=False, sensitive=False):
         if self.node.enabled is False:
             raise EngineError('External node is disabled.')
         validate_url(self.node.url, current_app.config['NODE_HOSTS'], public=False)
@@ -29,7 +29,7 @@ class NodeEngine:
         session.trust_env = False
         try:
             read_only = method == 'GET' and path.startswith(('/v1/capabilities', '/v1/instances'))
-            timeout = (3, 5) if read_only else (5, 20)
+            timeout = (5, 150) if sensitive else ((3, 5) if read_only else (5, 20))
             with session.request(method, self.node.url.rstrip('/') + path, json=payload,
                                  headers={'Authorization': f'Bearer {token}'}, timeout=timeout, stream=True, allow_redirects=False, verify=current_app.config.get('NODE_CA_BUNDLE') or True) as response:
                 if response.status_code == 404 and missing_ok:
@@ -43,7 +43,7 @@ class NodeEngine:
                 started = time.monotonic()
                 while chunk := response.raw.read1(65536, decode_content=True):
                     body.extend(chunk)
-                    if len(body) > 2**20 or time.monotonic() - started > RESPONSE_SECONDS:
+                    if len(body) > (65536 if sensitive else 2**20) or time.monotonic() - started > (150 if sensitive else RESPONSE_SECONDS):
                         raise UncertainError('External response exceeded the safe size/time limit. Actual operation state is unknown.')
                 try:
                     data = json.loads(body)
@@ -54,7 +54,8 @@ class NodeEngine:
                 if isinstance(data, dict) and isinstance(data.get('error'), str):
                     data['error'] = data['error'].replace(token, '[redacted]')
                 if response.status_code >= 400:
-                    detail = str(data.get('error', 'Request was rejected.'))[:1000] if isinstance(data, dict) else 'Request was rejected.'
+                    detail = ('Guest SSH request rejected. Check guest readiness, enrollment, network policy and node version.' if sensitive else
+                              (str(data.get('error', 'Request was rejected.'))[:1000] if isinstance(data, dict) else 'Request was rejected.'))
                     detail = detail.replace(token, '[redacted]')
                     raise EngineError(f'External node HTTP {response.status_code}: {detail}')
                 return data
@@ -91,6 +92,10 @@ class NodeEngine:
         raise UncertainError('External operation has not finished within 25 minutes. It remains reserved; reconcile it rather than creating a duplicate.')
 
     def create(self, spec, credentials, operation_id=None):
+        if spec.get('engine') == 'qemu' and credentials.get('control_public_key'):
+            feature = self.capabilities().get('sshx', {})
+            if not isinstance(feature, dict) or feature.get('protocol_version') != 1:
+                raise EngineError('Upgrade the external agent before creating managed-key QEMU VMs. No create operation was submitted.')
         return self._operate('create', spec, operation_id, credentials=credentials)
 
     def start(self, spec, **kwargs):
@@ -117,8 +122,21 @@ class NodeEngine:
     def metrics(self, spec):
         return node_protocol.metric(self._request('GET', f'/v1/instances/{spec["id"]}'), spec)
 
-    def console(self, spec):
-        return self._request('GET', f'/v1/instances/{spec["id"]}/console')['output']
+    def assign(self, spec, owner_id, **kwargs):
+        return self._operate('assign', spec, owner_id=owner_id, **kwargs)
 
-    def console_input(self, spec, text):
-        return self._request('POST', f'/v1/instances/{spec["id"]}/console', {'input': text})
+    def network(self, spec, restricted, **kwargs):
+        return self._operate('network', spec, network_restricted=restricted, **kwargs)
+
+    def guest_ssh(self, spec, mode, **kwargs):
+        from services.guest_access import target
+        caps = self.capabilities().get('sshx', {})
+        if not isinstance(caps, dict) or caps.get('protocol_version') != 1 or caps.get('available') is not True:
+            raise EngineError('This external node does not support SSHX. Upgrade/restart both panel and agent; no local fallback was attempted.')
+        payload = {'mode': mode, 'target': target(spec), **{k: v for k, v in kwargs.items() if v is not None}}
+        if mode in ('generate', 'stop', 'inspect', 'inspect_stop'):
+            maximum = caps.get('max_seconds')
+            if type(maximum) is not int or not 60 <= maximum <= 3600:
+                raise EngineError('External SSHX lifetime limit is invalid.')
+            payload['seconds'] = min(payload.get('seconds') or current_app.config['SSHX_MAX_SECONDS'], maximum)
+        return self._request('POST', f'/v1/instances/{spec["id"]}/sshx', payload, sensitive=True)

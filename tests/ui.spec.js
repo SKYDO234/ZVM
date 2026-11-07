@@ -1,7 +1,7 @@
 const {test,expect} = require('@playwright/test');
 const crypto=require('crypto');
 
-test('register, navigate, inspect real allocations and submit honest test-mode failure', async ({page}, testInfo)=>{
+test('registered users have their own area and cannot create VPS', async ({page}, testInfo)=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto('/');await expect(page.getByRole('heading',{name:'Your infrastructure. Without the overhead.'})).toBeVisible();
   await page.getByRole('link',{name:'Create your workspace'}).click();
@@ -9,34 +9,27 @@ test('register, navigate, inspect real allocations and submit honest test-mode f
   await page.locator('[name=name]').fill('Browser Tester');
   await page.locator('[name=email]').fill(`ui-${crypto.randomUUID()}@example.test`);
   await page.locator('[name=password]').fill(password);await page.locator('[name=confirm_password]').fill(password);
-  await page.getByRole('button',{name:'Create your workspace'}).click();await page.waitForURL('**/dashboard');
-  await expect(page.locator('[data-total=count]')).toHaveText('0');
-  await expect(page.locator('[data-total=ram_mb]')).toHaveText('0');
-  await expect(page.getByText('No real VPS resources or success records will be created.')).toBeVisible();
-  await page.waitForTimeout(5500);await expect(page.locator('#chart-awaiting')).toBeHidden();
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
-  if(testInfo.project.name==='android'){
-    await page.getByRole('button',{name:'Toggle navigation'}).click();await expect(page.locator('#sidebar')).toHaveClass(/open/);
-    await page.locator('#sidebar').getByRole('link',{name:'My VPS',exact:true}).click();
-  }else{await page.locator('#sidebar').getByRole('link',{name:'My VPS',exact:true}).click();}
-  await expect(page.getByRole('heading',{name:'Your next environment starts here.'})).toBeVisible();
-  await page.goto('/vps/create');await page.getByText('Docker container',{exact:true}).click();
-  await expect(page.locator('.qemu-only')).toBeHidden();await expect(page.locator('.docker-only')).toBeVisible();
-  await expect(page.locator('[name=public_key]')).toBeDisabled();
-  await page.locator('[name=name]').fill('ui-not-a-real-vps');
-  await page.locator('[name=allow_unenforced_storage]').check();
-  await expect(page.locator('#summary-name')).toHaveText('ui-not-a-real-vps');
-  await page.getByRole('button',{name:'Review configuration'}).click();
-  await expect(page.locator('.toast-error')).toContainText('Test mode');
-  const metrics=await page.request.get('/api/metrics');expect((await metrics.json()).totals.count).toBe(0);
-  for(const path of ['/vps/console','/webssh','/profile','/settings','/docs']){expect((await page.goto(path)).status()).toBe(200);}
-  expect((await page.goto('/admin')).status()).toBe(403);
-  expect(errors).toEqual([]);
+  await page.getByRole('button',{name:'Create your workspace'}).click();await page.waitForURL('**/user');
+  await expect(page.getByText('YOUR USER WORKSPACE',{exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'No VPS assigned yet'})).toBeVisible();
+  await expect(page.locator('#sidebar a[href="/vps/create"]')).toHaveCount(0);
+  const metrics=await page.request.get('/api/metrics'), data=await metrics.json();
+  expect(data.totals.count).toBe(0);expect(data.host).toBeUndefined();
+  if(testInfo.project.name==='android')await page.getByRole('button',{name:'Toggle navigation'}).click();
+  await page.locator('#sidebar').getByRole('link',{name:'My VPS',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'No VPS assigned yet.'})).toBeVisible();
+  expect((await page.goto('/vps/create')).status()).toBe(403);
+  for(const path of ['/vps/console','/webssh'])expect((await page.goto(path)).status()).toBe(404);
+  for(const path of ['/user','/profile','/settings','/docs']){
+    expect((await page.goto(path)).status()).toBe(200);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  }
+  expect((await page.goto('/admin')).status()).toBe(403);expect(errors).toEqual([]);
 });
 
 test('unauthenticated routes and documentation work on both screen sizes',async({page})=>{
   await page.goto('/dashboard');await expect(page).toHaveURL(/\/login/);
-  await page.goto('/docs');await expect(page.getByRole('heading',{name:'External Linux provisioning nodes'})).toBeVisible();
+  await page.goto('/docs');await expect(page.getByRole('heading',{name:'SKVM documentation'})).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
 });
 
@@ -45,7 +38,7 @@ const path=require('path');
 const accounts=()=>JSON.parse(fs.readFileSync(process.env.SKVM_UI_CREDENTIALS||path.join(__dirname,'../test-results/.ui-credentials.json'),'utf8'));
 async function signIn(page,account){
   await page.goto('/login');await page.locator('[name=email]').fill(account.email);await page.locator('[name=password]').fill(account.password);
-  await page.getByRole('button',{name:'Sign in to workspace'}).click();await page.waitForURL('**/dashboard');
+  await page.getByRole('button',{name:'Sign in to workspace'}).click();await page.waitForURL(account.role==='admin'?'**/dashboard':'**/user');
 }
 
 test('admin plans, quotas, node form, catalog, settings and guarded account deletion work in the browser',async({page,browser},testInfo)=>{
@@ -85,11 +78,26 @@ test('admin plans, quotas, node form, catalog, settings and guarded account dele
   expect((await page.request.get('/api/metrics')).ok()).toBeTruthy();expect(errors).toEqual([]);
 });
 
+test('administrator selects an assignee and test mode refuses fabricated creation',async({page},info)=>{
+  const state=accounts(), target=state.profile[info.project.name];
+  await signIn(page,state.admin);await page.goto('/vps/create');
+  await page.locator('[name=owner_id]').selectOption(String(target.id));
+  await page.getByText('Docker container',{exact:true}).click();
+  await expect(page.locator('.qemu-only')).toBeHidden();
+  await expect(page.locator('[name=public_key]')).toBeDisabled();
+  await page.locator('[name=name]').fill('ui-not-a-real-vps');
+  await page.locator('[name=allow_unenforced_storage]').check();
+  await expect(page.locator('#summary-name')).toHaveText('ui-not-a-real-vps');
+  await page.getByRole('button',{name:'Review configuration'}).click();
+  await expect(page.locator('.toast-error')).toContainText('Test mode');
+  expect((await (await page.request.get('/api/metrics')).json()).totals.count).toBe(0);
+});
+
 test('profile, password replacement, session revocation and logout are connected',async({page,browser},testInfo)=>{
   const account=accounts().profile[testInfo.project.name];await signIn(page,account);
   const otherContext=await browser.newContext(),other=await otherContext.newPage();
   await other.goto('http://127.0.0.1:5558/login');await other.locator('[name=email]').fill(account.email);await other.locator('[name=password]').fill(account.password);
-  await other.getByRole('button',{name:'Sign in to workspace'}).click();await other.waitForURL('**/dashboard');
+  await other.getByRole('button',{name:'Sign in to workspace'}).click();await other.waitForURL('**/user');
   await page.goto('/profile');const form=page.locator('form').filter({has:page.locator('[name=current_password]')});
   const replacement=crypto.randomBytes(18).toString('hex');
   await form.locator('[name=name]').fill('Updated Browser Profile');await form.locator('[name=current_password]').fill(account.password);
@@ -108,8 +116,8 @@ test('default administrator can navigate and use buttons before replacing the in
   page.on('pageerror',error=>errors.push(error.message));
   await signIn(page,account);
   await expect(page.locator('[data-initial-password-reminder]')).toBeVisible();
-  const destinations=[['Create VPS','/vps/create'],['My VPS','/vps'],['Console','/vps/console'],['WebSSH','/webssh'],
-    ['Profile','/profile'],['Settings','/settings'],['Admin control','/admin'],['Documentation','/docs'],['Overview','/dashboard']];
+  const destinations=[['Create VPS','/vps/create'],['All VPS','/vps'],
+    ['Profile','/profile'],['Settings','/settings'],['Admin control','/admin'],['Documentation','/docs'],['Admin overview','/dashboard']];
   for(const [name,destination] of destinations){
     if(testInfo.project.name==='android')await page.getByRole('button',{name:'Toggle navigation'}).click();
     const response=page.waitForResponse(response=>new URL(response.url()).pathname===destination&&response.request().isNavigationRequest());

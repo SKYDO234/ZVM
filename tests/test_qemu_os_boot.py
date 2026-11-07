@@ -73,7 +73,7 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)],check=True,capture_output=True)
         public=ssh_key(key.with_suffix('.pub').read_text())
         data=panel.create({'name':data['name'],'engine':'qemu','os_id':image.id,'ram_mb':768,'vcpus':1,'disk_gb':10,
-                           'username':'skvmcheck','ssh_port':data['ssh_port'],'auth_method':'key','public_key':public})
+                           'username':'skvmcheck','ssh_port':data['ssh_port'],'auth_method':'key','public_key':public,'network_mode':'internet','accept_network_risk':'1'})
         assert panel.metrics()['status']=='stopped' and data['runtime']['accel']=='tcg'
         # This also validates native qemu-img check and a real cloud-localds CIDATA seed.
         assert inspect_outcome('create',data,{'spec':data},engine)['status']=='stopped'
@@ -82,15 +82,15 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         assert panel.metrics()['status']=='running'
         report['phase']='qmp-running'
         _wait_for_ssh(key,data['ssh_port']);report['phase']='ssh-authenticated'
-        cloud=_ssh(key,data['ssh_port'],'sudo -n cloud-init status --wait --format=json',timeout=180)
+        cloud=_ssh(key,data['ssh_port'],'sudo -n cloud-init status --wait --format=json',timeout=300)
         assert cloud.returncode==0,cloud.stdout[-3000:]+cloud.stderr[-1000:]
         status=json.loads(cloud.stdout)
         assert status.get('status')=='done' and not status.get('errors'),status
         report['phase']='cloud-init-complete'
-        report['phase']='webssh-pty-verification'
-        panel.webssh(key,_host_fingerprints(key,data['ssh_port']))
+        report['phase']='sshx-guest-install-and-link-verification'
+        panel.sshx(_host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command))
         assert panel.metrics()['status']=='running'
-        report['webssh']={'authenticated':True,'verified_host_key':True,'pty_cols':111,'pty_rows':37,'guest_identity':'skvmcheck'}
+        report['sshx']={'guest_installer':True,'actual_link_displayed':True,'verified_host_key':True,'client_stopped':True,'unrelated_process_preserved':True,'guest_identity':'skvmcheck'}
         report['cloud_init']={'status':status['status'],'errors':status.get('errors',[])}
         guest=_ssh(key,data['ssh_port'],"id -un; getconf _NPROCESSORS_ONLN; grep '^MemTotal:' /proc/meminfo; cat /etc/os-release")
         assert guest.returncode==0 and guest.stdout.splitlines()[:2]==['skvmcheck','1']
@@ -122,9 +122,10 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         panel.action('reinstall',{'os_id':image.id,'username':'skvmcheck','auth_method':'key','public_key':public})
         data=panel.spec();(key.parent/'known_hosts').unlink(missing_ok=True)
         panel.action('start');_wait_for_ssh(key,data['ssh_port'])
-        report['phase']='webssh-reinstall-key-verification'
-        panel.webssh(key,_host_fingerprints(key,data['ssh_port']),expect_changed=True)
-        report['webssh']['reinstall_changed_key_confirmed']=True
+        report['phase']='sshx-reinstall-management-key-verification'
+        panel.sshx(_host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command), orphan=True)
+        report['sshx']['reinstall_new_management_key_verified']=True
+        report['sshx']['orphan_client_stopped']=True
         absent=_ssh(key,data['ssh_port'],'test ! -e ~/skvm-persistence-check')
         assert absent.returncode==0
         report['phase']='reinstall-verified'

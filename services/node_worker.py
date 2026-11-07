@@ -43,6 +43,14 @@ def process_operation(ident):
                     mutated = True
                     result = engine.reinstall(spec, payload['credentials'])
                     instance.spec = spec | {'runtime': result['runtime']}
+                elif kind == 'assign':
+                    mutated = True
+                    result = engine.assign(previous, payload.get('owner_id'))
+                    instance.spec = previous | {'owner_id': result['owner_id']}
+                elif kind == 'network':
+                    mutated = True
+                    result = engine.network(previous, payload.get('network_restricted'))
+                    instance.spec = previous | {'runtime': result['runtime'], 'network_restricted': payload['network_restricted']}
                 elif kind == 'resize':
                     from services.security import integer
                     size = integer(payload.get('disk_gb'), 'Disk', previous['disk_gb'] + 1, settings()['max_instance_disk_gb'])
@@ -94,7 +102,7 @@ def reconcile_operation(ident):
             requested = payload['spec']
             with locked(f'control-{requested["id"]}', blocking=False):
                 instance = db.session.get(AgentInstance, requested['id'])
-                spec = requested if payload['kind'] == 'create' else (copy.deepcopy(instance.spec) if instance else requested)
+                spec = requested if payload['kind'] in ('create', 'reinstall') else (copy.deepcopy(instance.spec) if instance else requested)
                 if spec.get('engine') not in ('qemu', 'docker'):
                     raise EngineError('The original engine identity is unavailable. Manual inspection is required.')
                 result = inspect_outcome(payload['kind'], spec, payload, engine_for(spec['engine']))
@@ -106,11 +114,17 @@ def reconcile_operation(ident):
                         instance.spec = recovered
                     else:
                         db.session.add(AgentInstance(id=spec['id'], spec=recovered))
+                elif payload['kind'] == 'reinstall':
+                    if not instance:
+                        raise EngineError('The original agent instance is missing.')
+                    instance.spec = payload['spec'] | {'runtime': result['runtime'], 'ssh_port': result.get('ssh_port')}
                 elif payload['kind'] == 'delete':
                     if instance:
                         db.session.delete(instance)
                 elif instance:
-                    if payload['kind'] == 'resize':
+                    if payload['kind'] == 'assign':
+                        instance.spec = spec | {'owner_id': payload['owner_id']}
+                    elif payload['kind'] == 'resize':
                         instance.spec = spec | {'disk_gb': result['disk_gb']}
                     elif result.get('runtime'):
                         instance.spec = spec | {'runtime': result['runtime']}

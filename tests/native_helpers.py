@@ -69,51 +69,50 @@ class NativePanel:
         assert response.status_code==200
         return response.json
 
-    def webssh(self, key, expected_fingerprints, expect_changed=False):
-        """Actual native guest -> SSH PTY -> panel WS, with no endpoint mocks."""
-        import json
-        import re
-        import threading
-        from werkzeug.serving import make_server
-        from websockets.sync.client import connect
-        from services.node_webssh import WIRE_LOGGER
-        page=self.client.get(f'/webssh/{self.ident}')
-        assert page.status_code==200 and b'data-available="true"' in page.data
-        token=re.search(rb'name="csrf-token" content="([^"]+)"',page.data)[1].decode()
-        cookie=self.client.get_cookie(self.app.config['SESSION_COOKIE_NAME']).value
-        server=make_server('127.0.0.1',0,self.app,threaded=True)
-        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
-        origin=f'http://127.0.0.1:{server.server_port}'
+    def sshx(self, expected_fingerprints, guest=None, orphan=False):
+        """Actual guest installer/client, encrypted management key and real output link."""
+        from models import GuestAccess, SSHXSession
+        from services.sshx import valid_link
+        self.action('sshx_generate')
+        db.session.expire_all()
+        access=db.session.get(GuestAccess,self.ident)
+        assert access.host_fingerprint in expected_fingerprints
+        row=db.session.get(SSHXSession,self.ident)
+        assert row and row.state=='generated'
+        link=valid_link(decrypt(row.link_encrypted))
+        secrets_protected = link not in row.link_encrypted and 'PRIVATE KEY' not in access.private_key_encrypted
+        assert secrets_protected, 'SSHX secrets were not encrypted.'
+        page=self.client.get(f'/vps/{self.ident}')
+        displayed = page.status_code==200 and link.encode() in page.data
+        assert displayed, 'The actual guest link was not displayed; secret output intentionally omitted.'
+        assert b'referrerpolicy="no-referrer"' in page.data
+        assert self.client.get(f'/vps/{self.ident}/console').status_code==404
+        assert self.client.get(f'/webssh/{self.ident}').status_code==404
+        blocker = None
+        if guest is not None:
+            # Deliberately corrupt the guest PID record with our harmless sleep,
+            # or remove timeout while leaving the real SSHX child orphaned. Only
+            # the disposable GUEST runs these acceptance commands, never host OS.
+            state = f'"$HOME/.local/state/skvm-sshx-{self.ident}"'
+            script = (f'state={state}; '
+                      + ('pid=$(cat "$state/pid"); kill -KILL "$pid"; rm -f "$state/pid"; ' if orphan else '')
+                      + 'sleep 120 </dev/null >/dev/null 2>&1 & blocker=$!; '
+                      + ('' if orphan else 'printf \'%s\n\' "$blocker" > "$state/pid"; ')
+                      + 'printf \'%s\' "$blocker"')
+            response = guest(script)
+            blocker = response.stdout.strip()
+            assert response.returncode == 0 and blocker.isdecimal()
         try:
-            with connect(origin.replace('http:','ws:')+f'/api/webssh/{self.ident}',origin=origin,
-                         additional_headers={'Cookie':self.app.config['SESSION_COOKIE_NAME']+'='+cookie},
-                         user_agent_header=self.client.environ_base['HTTP_USER_AGENT'],
-                         proxy=None,compression=None,close_timeout=2,logger=WIRE_LOGGER) as ws:
-                ws.send(json.dumps({'type':'connect','csrf_token':token,'cols':90,'rows':28,
-                                    'credentials':{'method':'key','private_key':key.read_text(),'passphrase':''}}))
-                event=json.loads(ws.recv(timeout=20))
-                assert event['type']=='host_key' and event['changed'] is expect_changed,event
-                # Cross-check before trust/auth against public keys obtained
-                # through the independently tested native guest SSH connection.
-                fingerprint=event['fingerprint']
-                assert fingerprint in expected_fingerprints
-                ws.send(json.dumps({'type':'trust','fingerprint':fingerprint,'accept':True,'confirm_changed':expect_changed}))
-                ready=json.loads(ws.recv(timeout=20))
-                assert ready['type']=='connected' and ready['username']=='skvmcheck',ready
-                ws.send(json.dumps({'type':'resize','cols':111,'rows':37}))
-                ws.send(json.dumps({'type':'input','data':"printf '\\nSKVM_WEBSSH_OK:%s\\n' \"$(id -un)\"; stty size\r"}))
-                output='';deadline=time.monotonic()+30
-                while time.monotonic()<deadline:
-                    event=json.loads(ws.recv(timeout=10))
-                    assert event['type']!='error',event
-                    if event['type']=='output':output+=event['data']
-                    if 'SKVM_WEBSSH_OK:skvmcheck' in output and '37 111' in output:break
-                assert 'SKVM_WEBSSH_OK:skvmcheck' in output and '37 111' in output,output[-3000:]
-                ws.send(json.dumps({'type':'disconnect'}))
-                while json.loads(ws.recv(timeout=10))['type']!='disconnected':pass
-                return fingerprint
+            self.action('sshx_stop')
+            if blocker is not None:
+                response = guest(f'kill -0 {int(blocker)}')
+                assert response.returncode == 0, 'SSHX stop signalled an unrelated guest process.'
         finally:
-            server.shutdown();server.server_close();thread.join(timeout=3)
+            if blocker is not None:
+                guest(f'kill {int(blocker)}')
+        db.session.expire_all()
+        assert db.session.get(SSHXSession,self.ident).link_encrypted is None
+        return access.host_fingerprint
 
     def close(self):
         assert stop_background(self.app),'The actual worker is still running; do not remove its data.'

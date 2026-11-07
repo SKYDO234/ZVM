@@ -1,0 +1,226 @@
+"""Bounded, non-interactive SSH to a *proven managed guest*, never an arbitrary host.
+
+There is no PTY, browser socket, agent forwarding, local SSH configuration or
+request-supplied command. The only callers execute fixed enrollment/SSHX scripts.
+"""
+import base64
+from contextlib import contextmanager
+from datetime import timedelta
+import hashlib
+import logging
+import re
+import socket
+import time
+import uuid
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from flask import current_app
+import paramiko
+
+from engines import EngineError, UncertainError
+from engines.qemu_engine import QemuEngine
+from extensions import db
+from models import AuthAttempt
+from models.sshx import GuestLease
+from models.user import utcnow
+from services.guest_keys import SSHError, private_key
+from services.guest_access import GuestAuthorityError
+from services.security import locked, valid_uuid
+
+SSH_LOGGER = logging.getLogger('skvm.private-guest-ssh')
+SSH_LOGGER.disabled = True
+SSH_LOGGER.propagate = False
+FINGERPRINT = re.compile(r'SHA256:[A-Za-z0-9+/]{43}')
+
+
+def new_key():
+    key = Ed25519PrivateKey.generate()
+    private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                               serialization.NoEncryption()).decode()
+    public = key.public_key().public_bytes(serialization.Encoding.OpenSSH,
+                                          serialization.PublicFormat.OpenSSH).decode()
+    return private, public + ' skvm-managed'
+
+
+def validate_spec(spec):
+    if not current_app.config['SSHX_ENABLED']:
+        raise EngineError('SSHX is disabled by the operator.')
+    if current_app.config['TEST_MODE']:
+        raise EngineError('SSHX is unavailable in test mode; no guest connection was attempted.')
+    valid_uuid(spec.get('id'))
+    if spec.get('engine') != 'qemu':
+        raise EngineError('SSHX requires a managed QEMU VM. Docker instances have no managed SSH service.')
+    user = spec.get('username')
+    if not isinstance(user, str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,30}', user) or user in ('root', 'nobody', 'daemon', 'bin', 'sys'):
+        raise EngineError('The VM has no valid non-root SSH username.')
+    port = spec.get('ssh_port')
+    if type(port) is not int or not 1024 <= port <= 65535:
+        raise EngineError('The VM has no valid managed SSH forward.')
+
+
+def credentials(data):
+    if not isinstance(data, dict):
+        raise EngineError('Choose an existing guest password or private key.')
+    if data.get('method') == 'password':
+        password = data.get('password')
+        if set(data) != {'method', 'password'} or not isinstance(password, str) or not 1 <= len(password) <= 1024:
+            raise EngineError('An existing guest password of 1–1024 characters is required.')
+    elif data.get('method') == 'key':
+        material, phrase = data.get('private_key'), data.get('passphrase', '')
+        if (set(data) - {'method', 'private_key', 'passphrase'} or not isinstance(material, str)
+                or not 1 <= len(material.encode()) <= 65536 or not isinstance(phrase, str) or len(phrase) > 1024):
+            raise EngineError('Enrollment private keys are limited to 64 KiB and passphrases to 1024 characters.')
+    else:
+        raise EngineError('Choose password or private-key authentication.')
+    return dict(data)
+
+
+def fingerprint(key):
+    return 'SHA256:' + base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip('=')
+
+
+@contextmanager
+def admission(principal, ident):
+    now, lease = utcnow(), str(uuid.uuid4())
+    with locked('guest-ssh-admission'):
+        db.session.execute(db.delete(GuestLease).where(GuestLease.expires_at < now))
+        total = db.session.scalar(db.select(db.func.count()).select_from(GuestLease))
+        own = db.session.scalar(db.select(db.func.count()).select_from(GuestLease).where(GuestLease.principal == principal))
+        tag = hashlib.sha256(f'guest-ssh:{principal}'.encode()).hexdigest()
+        attempts = db.session.scalar(db.select(db.func.count()).select_from(AuthAttempt).where(
+            AuthAttempt.fingerprint == tag, AuthAttempt.created_at > now - timedelta(minutes=1)))
+        if total >= 4 or own >= 2 or attempts >= 10:
+            db.session.rollback()
+            raise EngineError('Guest SSH admission/rate limit reached. Wait one minute and retry.')
+        db.session.add(AuthAttempt(fingerprint=tag))
+        db.session.add(GuestLease(id=lease, principal=principal, instance_id=ident,
+                                  expires_at=now + timedelta(seconds=180)))
+        db.session.commit()
+    try:
+        yield
+    finally:
+        db.session.rollback()
+        db.session.execute(db.delete(GuestLease).where(GuestLease.id == lease))
+        db.session.commit()
+
+
+class GuestSSH:
+    def __init__(self, spec, expected_fingerprint=None, check=lambda: None):
+        validate_spec(spec)
+        if expected_fingerprint is not None and (not isinstance(expected_fingerprint, str) or not FINGERPRINT.fullmatch(expected_fingerprint)):
+            raise EngineError('Invalid saved guest host fingerprint.')
+        self.spec, self.check = dict(spec), check
+        self.sock, self.transport = None, None
+        try:
+            check()
+            endpoint = QemuEngine().ssh_endpoint(spec)
+            if endpoint != ('127.0.0.1', spec['ssh_port']):
+                raise EngineError('The verified guest endpoint does not match this VM’s managed forward.')
+            self.sock = socket.create_connection(('127.0.0.1', endpoint[1]), timeout=5)
+            self.transport = paramiko.Transport(self.sock)
+            self.transport.set_log_channel(SSH_LOGGER.name)
+            self.transport.banner_timeout = self.transport.auth_timeout = 10
+            self.transport.start_client(timeout=10)
+            if not self.transport.is_active() or self.transport.remote_version is None:
+                raise EngineError('The guest did not complete its SSH handshake.')
+            check()
+            QemuEngine().ssh_endpoint(spec)  # Re-prove the listener after the handshake.
+            self.fingerprint = fingerprint(self.transport.get_remote_server_key())
+            if expected_fingerprint is not None and self.fingerprint != expected_fingerprint:
+                raise EngineError('Guest SSH host key changed. No credentials were sent. Verify the new fingerprint and re-enroll explicitly; do not bypass this check.')
+        except EngineError:
+            self.close()
+            raise
+        except Exception:
+            self.close()
+            raise EngineError('Cannot establish verified guest SSH. Start the VM, wait for cloud-init/sshd, and check its managed SSH forward.') from None
+
+    def authenticate(self, auth):
+        auth = credentials(auth)
+        try:
+            self.check()
+            QemuEngine().ssh_endpoint(self.spec)
+            if auth['method'] == 'password':
+                self.transport.auth_password(self.spec['username'], auth['password'], fallback=False)
+            else:
+                self.transport.auth_publickey(self.spec['username'], private_key(auth))
+            if not self.transport.is_authenticated():
+                raise EngineError('Guest SSH authentication failed.')
+            self.check()
+        except (EngineError, SSHError):
+            raise
+        except Exception:
+            raise EngineError('Guest SSH authentication failed. Use the guest account credentials, not your panel password.') from None
+        finally:
+            if self.transport and self.transport.auth_handler:
+                self.transport.auth_handler.password = None
+                self.transport.auth_handler.private_key = None
+            auth.clear()
+
+    def execute(self, script, seconds=120):
+        """Fixed scripts via stdin; never sh -c with browser data or a host subprocess."""
+        channel, started = None, False
+        try:
+            self.check()
+            QemuEngine().ssh_endpoint(self.spec)
+            channel = self.transport.open_session(timeout=5)
+            channel.settimeout(3)
+            channel.exec_command('sh -s')
+            started = True
+            channel.sendall(script.encode())
+            channel.shutdown_write()
+            end, output = time.monotonic() + seconds, bytearray()
+            while True:
+                self.check()
+                for ready, receive in ((channel.recv_ready, channel.recv), (channel.recv_stderr_ready, channel.recv_stderr)):
+                    while ready():
+                        output.extend(receive(8192))
+                        if len(output) > 65536:
+                            raise UncertainError('Guest command output exceeded the safe limit. Its outcome must be inspected before retrying.')
+                if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                    code = channel.recv_exit_status()
+                    if code != 0:
+                        # Never return/log raw output: it may contain access links or credentials.
+                        markers = set(re.findall(rb'SKVM_ERROR:([A-Z_]+)', output))
+                        errors = {
+                            b'TOOLS': 'Guest prerequisites are missing: bash, curl, tar, timeout, setsid and nohup. Install these inside the guest, then retry.',
+                            b'PIDFD': 'Safe SSHX process control requires guest Python 3.9+ and Linux pidfd support. Install/upgrade these inside the VM, or stop the VM to revoke access.',
+                            b'INSTALL': 'The SSHX installer failed inside the VM. Check guest outbound HTTPS, DNS, CA certificates and passwordless sudo.',
+                            b'NO_LINK': 'SSHX did not produce a valid link before the deadline. Check guest outbound access to sshx.io.',
+                            b'PROCESS': 'The saved SSHX process identity cannot be verified. No unrelated process was signalled; inspect the guest.',
+                            b'STOP': 'SSHX did not stop cleanly. The existing link was not declared revoked.',
+                            b'ENROLL': 'Cannot safely add the management public key to the guest authorized_keys file.',
+                            b'NOT_FOUND': 'No live SSHX process for this operation can be proven.',
+                        }
+                        raise EngineError(next((text for key, text in errors.items() if key in markers),
+                                               'The fixed guest operation failed. No raw guest output was logged.'))
+                    return output.decode('utf-8', errors='replace')
+                if time.monotonic() >= end or not self.transport.is_active():
+                    raise UncertainError('The guest command timed out or disconnected. Its outcome is unknown; reconcile before retrying.')
+                time.sleep(0.05)
+        except GuestAuthorityError:
+            if started:
+                raise UncertainError('Authority changed after guest command submission. A client may remain running; inspect or stop the VM before retrying.') from None
+            raise
+        except EngineError:
+            raise
+        except Exception:
+            if started:
+                raise UncertainError('The guest connection ended after command submission. Inspect its outcome before retrying.') from None
+            raise EngineError('Cannot open a guest SSH command channel.') from None
+        finally:
+            if channel:
+                channel.close()
+
+    def close(self):
+        if self.transport:
+            self.transport.close()
+        if self.sock:
+            self.sock.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()

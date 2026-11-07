@@ -4,7 +4,7 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
-**Previously validated baseline:** [all six CI jobs passed](https://github.com/SKYDO234/ZVM/actions/runs/42209561597) on application source `aa1a15a`—196 backend tests on each of Python 3.11/3.12, ten desktop/mobile browser journeys, the root installer with fresh verified Node 24 LTS and real port-31120 login/rotation/restart checks, native QEMU/Ubuntu/SSH lifecycle, two real Docker/TLS-agent cases and all nine image endpoints. See [the execution report and scope limits](docs/testing.md).
+**Current revision:** Console/WebSSH have been replaced by **Generate SSHX** on VPS Details, administrator-only provisioning/assignment and a separate user workspace. See [SSHX setup and its external-access security boundary](docs/sshx.md) and [current validation/equipped-host checks](docs/testing.md). Earlier green CI runs describe their exact historical source, not automatic validation of this revision.
 
 ## The uploaded `n.txt` is the reference
 
@@ -21,10 +21,10 @@ bash install.sh
 The **root installer** installs Python/venv/build prerequisites, QEMU/cloud-init/SSH tools and Docker packages when no Docker CLI is present; reuses Node 22+ or installs **Node 24 LTS with HTTPS + SHA-256 verification**; installs Python/npm dependencies; builds the frontend; safely initializes SQLite; and starts the real **Gunicorn panel on `0.0.0.0:31120`**. It requires Debian/Ubuntu Linux and passwordless sudo for system packages. Installation failures are reported, not silently ignored.
 
 1. Open forwarded port **31120** from the Codespaces **Ports** tab. **Keep visibility Private.** The installer attempts to mark it Private using the existing Codespaces CLI; if that fails, check the Ports tab yourself. The devcontainer forwards 31120 and starts the installed panel on container startup.
-2. On a **new, empty panel**, sign in with **username `admin` / password `admin123`**. Login opens **Overview** immediately and all pages/buttons remain available under normal authorization. A persistent, non-blocking reminder asks you to replace the initial password in **Profile** with a private password of **12–128 characters**. Passwords are stored as salted hashes. Reinstallation/restart **never resets the password or adds this account to an existing installation**.
+2. On a **new, empty panel**, sign in with **username `admin` / password `admin123`**. Login opens **Admin overview** immediately and all pages/buttons remain available under normal authorization. A persistent, non-blocking reminder asks you to replace the initial password in **Profile** with a private password of **12–128 characters**. Passwords are stored as salted hashes. Reinstallation/restart **never resets the password or adds this account to an existing installation**.
 3. Open **Settings** for the *actual* local engine capabilities. Missing host permissions, a Docker daemon or QEMU are not hidden. Installing binaries does not grant a Codespace Docker/cgroup/KVM privileges.
-4. Configure an available engine, select **Create VPS**, review your configuration, and confirm. Watch its background job. A successful create leaves a **real stopped instance**; use **Start** to boot/run it.
-5. For a running QEMU guest, open **WebSSH** from the sidebar or instance details. Authenticate with the **guest** password/private key and confirm its host fingerprint. The existing serial console remains available for boot/SSH troubleshooting. Docker uses its existing logs/diagnostics, not fabricated SSH access.
+4. As an administrator, configure an available engine, select **Create VPS**, choose an **enabled owner account**, review that account’s plan/quotas and the configuration, and confirm. Watch its background job. A successful create leaves a **real stopped instance**; use **Start** to boot/run it.
+5. For SSHX, explicitly allow guest outbound internet at creation (or ask an administrator to change it while stopped). On the running VM’s Details page, select **Generate SSHX**. The installer and client execute **inside that selected VM**, and the actual output URL appears there. Existing guests use one-time credential enrollment without resetting passwords or keys. Normal users sign in to **My workspace** and manage only their assigned VPS; they cannot create or assign guests.
 
 The default install stays in the foreground; leave the terminal open. Alternatively:
 
@@ -42,13 +42,17 @@ Background logs are `data/logs/panel.error.log` / `panel.access.log`; the master
 
 `python skvm.py` **still works** and automatically uses `.venv/bin/python`. Node/npm are build-time only; browser dependencies are bundled locally, without CDN requirements. A newly downloaded Node runtime lives in ignored `.local/node`; the installer reuses it (for manual npm work, add `.local/node/bin` to `PATH`). Legacy `scripts/install.sh` delegates to the root installer; `scripts/install-codespaces.sh` remains a setup-only compatibility wrapper.
 
-### WebSSH terminals
+### SSHX guest access
 
-The uploaded terminal design is integrated into the authenticated panel with local **xterm 6**, real full-duplex **WebSockets/SSH PTYs**, password or encrypted private-key authentication, explicit first/changed host-key confirmation, resize, mobile special keys, clear/disconnect and measured transport RTT. Only the selected managed QEMU guest is reachable; arbitrary hosts/ports/root, host shells, stored private keys and token/PIN bypasses are not exposed. Existing accounts/data and the non-blocking initial-password reminder are preserved.
+The panel runs the requested `curl -sSf https://sshx.io/get | sh`, then `sshx`, **inside the selected managed QEMU VM**, never on the host. New VMs receive unique encrypted management keys alongside the owner’s native authentication. Existing VMs enroll once using their current guest credential and an independently confirmed SSH host fingerprint; no reinstall/reset is required.
 
-**Use HTTPS** (localhost HTTP is only for development). External guests connect through the node's verified-TLS, bearer-authenticated **WSS relay**, never the panel's localhost. Update/restart both ends and enable proxy WebSocket upgrades. Sessions have cross-worker limits/timeouts and close after logout, password/session revocation, suspension or loss of ownership. See [WebSSH usage, security, limits and troubleshooting](docs/webssh.md) and [node proxy setup](docs/external-nodes.md).
+Only the VM owner or an administrator can generate, view, copy or stop its real output link on **VPS Details**. **The URL is a shell/sudo capability outside panel login.** Keep it private. Logout, password changes and account disablement do not revoke a copied URL: stop its verified client or the VM. Managed clients have a maximum one-hour lifetime. Docker has no injected SSH daemon and does not offer SSHX.
 
-Existing installations need the new Python dependencies and a worker restart, not a database reset:
+**Restricted outbound networking remains the default** and prevents SSHX. An administrator must explicitly acknowledge internet access per VM; QEMU user networking with restrictions disabled can also reach host/private services, so use trusted guests or an isolated node. Nothing silently relaxes global or existing policy. [Full setup, guest prerequisites, enrollment, encryption and recovery](docs/sshx.md).
+
+**Use HTTPS** outside local development. External guests use verified-TLS, bearer-authenticated **HTTPS RPC**, not a WebSocket relay or panel-localhost fallback. Update/restart both ends; node proxies need 180-second read/send timeouts. The active Console/WebSSH pages, APIs, PTYs, transports and xterm dependencies were removed. Original uploaded references are retained unchanged only as references.
+
+Existing installations need updated dependencies and **all old workers restarted**, not a database reset:
 
 ```bash
 bash install.sh --no-start
@@ -56,7 +60,7 @@ bash install.sh --no-start
 .venv/bin/python scripts/serve-panel.py --background
 ```
 
-The local frontend dependencies are also committed; `npm ci && npm run build:assets` rebuilds them. Set `SKVM_WEBSSH_ENABLED=0` and restart to disable WebSSH. A running QEMU process alone does not prove the guest OS/SSH service is ready.
+`npm ci && npm run build:assets` rebuilds the committed local frontend assets. `SKVM_SSHX_ENABLED=0` disables new guest-control operations but does **not** stop existing clients; stop clients/guests first. Preserve SQLite and the original encryption/session key files together.
 
 ### Existing installation stuck on one page
 
@@ -120,11 +124,11 @@ The backend builds controlled argument lists for `qemu-system-x86_64`, `qemu-img
 - Each guest gets a **full independent QCOW2 copy**, resized only after validating its base virtual size, plus its own cloud-init seed and UUID. No shared writable disk or backing-file dependency.
 - Root SSH disabled. Choose a valid public key or a SHA512-crypt guest password hash. Plaintext guest passwords are not saved to disk, sessions, job payloads, or logs. Temporary user/meta-data files are removed after seed creation; the protected seed contains the required password **hash**, if chosen.
 - Loopback-only SSH and extra TCP forwards on one validated user-mode network backend. No TAP/bridge privilege required. QEMU binds `127.0.0.1`, not a public interface. Outbound guest networking is restricted by default; operator network policy applies to new instances.
-- Independent `Popen` processes, per-VM `flock` locks, private Unix QMP/serial sockets, persisted PID **and creation time**, exact UUID/disk matching, and recovery of a matching process if its metadata was lost.
+- Independent `Popen` processes, per-VM `flock` locks, private Unix QMP control sockets, persisted PID **and creation time**, exact UUID/disk matching, and recovery of a matching process if its metadata was lost.
 - **Start** initially pauses the virtual CPUs until the QMP monitor is ready, then explicitly resumes and verifies the machine. It requires a responsive QMP monitor and a running QMP machine state. That proves a QEMU process is running, **not** that cloud-init or SSH is ready. If a resume reply is lost, the process is kept and the job becomes uncertain; no potentially live guest is silently killed.
 - **Stop** sends QMP `system_powerdown` (ACPI). It waits up to 180 seconds to accommodate slow TCG shutdown/services; a still-running guest is then reported honestly; it is **not** silently killed. **Force stop** is separate, explicit and warns about data loss.
 - Restart, stopped-only deletion, **grow-only** disk resizing, and stopped-only OS reinstall. Reinstall retains the old disk until the new image/seed is prepared. Growing the virtual disk may still require `growpart`/`resize2fs`/`xfs_growfs` inside the guest.
-- Serial console output is real guest output. An independent maintenance loop trims emulator/serial logs above 5 MiB to the latest 1 MiB every 20 seconds. Input goes to a guest-only Unix chardev, never a host shell. Input is hidden in the UI and not included in audit logs.
+- Emulator/serial boot logs remain internal for bounded operator troubleshooting; the maintenance loop trims logs above 5 MiB to the latest 1 MiB. There is no public serial-input/Console endpoint. Interactive access is the guest’s native SSH or its explicitly generated SSHX capability.
 
 ### OS catalog derived from `n.txt`
 
@@ -174,7 +178,7 @@ Containers have:
 
 - Configured memory/memory+swap ceilings and NanoCPUs, PID limit 128.
 - UID/GID **1000:1000**, all capabilities dropped, `no-new-privileges`, no privileged flag, no host mounts/socket, and no host namespaces.
-- Their own SKVM-labeled **internal bridge network**, separate from QEMU and other guest networks. No automatic public port or SSH server. Use in-container Console diagnostics or an operator-approved deployment architecture for application networking.
+- Their own SKVM-labeled **internal bridge network**, separate from QEMU and other guest networks. No automatic public port or SSH server. Use trusted operator daemon tooling or an operator-approved deployment architecture for application networking.
 - Exact instance/owner labels checked before every lifecycle operation.
 - Start, stop, restart, explicit force-stop, stopped-only delete, actual cgroup metrics and writable-layer usage.
 - Fixed allowlisted diagnostics (`id`, `uname -a`, `df -h`, `ps aux`, `/etc/os-release`), never a web-accessible host shell. Some minimal images omit utilities; actual nonzero exit codes are displayed.
@@ -195,7 +199,7 @@ CPU usage may exceed 100% across cores. Process RSS is not guest `free` memory. 
 
 On Linux, capacity follows the process's actual cgroup v1/v2 membership and mount roots, including ancestor RAM/CPU/cpuset limits and shared-parent RAM headroom—not just the mount root or the physical machine totals. Usage scope is labeled separately from effective allocation capacity. Malformed, missing or unreadable cgroup capacity data blocks new allocations with a visible reason rather than guessing that the physical host is available.
 
-Defaults: 3 VPS/user, 4096 MiB/user, 4 vCPU/user, 60 GiB/user; per-instance ceilings 2048 MiB/2 vCPU/40 GiB; 8 guests/node; 75% of effective host RAM available for allocations; 2 GiB free-storage reserve; **no CPU overcommit**. Real node capacity may be **much less** than the plan. Queued/running/uncertain create jobs and disk-growth deltas reserve quota (growth is charged to the guest owner, even when an administrator requested it). Stopped instances retain allocations. Full virtual disk reservation deliberately overestimates materialized storage to avoid thin-provisioning surprises. RAM available-now checks add 256 MiB headroom. Restart rechecks that headroom **after** graceful shutdown releases the guest's memory; if the check fails, the guest stays stopped and the job fails rather than claiming a restart. Stopped disk growth does not reserve the guest's RAM a second time.
+Defaults: 3 VPS/user, 4096 MiB/user, 4 vCPU/user, 60 GiB/user; per-instance ceilings 2048 MiB/2 vCPU/40 GiB; 8 guests/node; 75% of effective host RAM available for allocations; 2 GiB free-storage reserve; **no CPU overcommit**. Real node capacity may be **much less** than the plan. Queued/running/uncertain create jobs, incoming assignments and disk-growth deltas reserve the assigned owner’s quota (growth is charged to the guest owner, even when an administrator requested it). Stopped instances retain allocations. Full virtual disk reservation deliberately overestimates materialized storage to avoid thin-provisioning surprises. RAM available-now checks add 256 MiB headroom. Restart rechecks that headroom **after** graceful shutdown releases the guest's memory; if the check fails, the guest stays stopped and the job fails rather than claiming a restart. Stopped disk growth does not reserve the guest's RAM a second time.
 
 Virtual RAM and vCPU are guest configuration—not new physical hardware or a Codespaces promise of dedicated cores. QEMU also has emulator/I/O overhead; vCPU count is not a hard host cgroup CPU ceiling. **TCG can be very slow.** Do not expose this personal/team control plane as a commercial hostile multi-tenant hosting service.
 
@@ -211,7 +215,7 @@ See [the complete external-node setup and API contract](docs/external-nodes.md).
 
 ## Jobs, persistence and crash recovery
 
-`python skvm.py` starts a persistent SQLite-backed queue and one background worker. Multiple web processes cannot own the worker lock at once. Downloads do not occupy web request threads. Confirmation tickets are owner-bound, encrypted, expire in 10 minutes, and are consumed once. Records are saved **after** an engine creates actual resources.
+`python skvm.py` starts a persistent SQLite-backed queue and one background worker. Multiple web processes cannot own the worker lock at once. Downloads do not occupy web request threads. Confirmation tickets are bound to the requesting administrator and assignee, encrypted, expire in 10 minutes, and are consumed once. Records are saved **after** an engine creates actual resources.
 
 For a WSGI deployment:
 
@@ -230,7 +234,7 @@ An interrupted in-flight operation becomes **uncertain** on worker restart. The 
 - Docker creation must prove matching labels, actual memory/CPU/security constraints and an owned internal network. Its storage enforcement/budget flag remains honest.
 - Lifecycle recovery observes actual state and, for a running QEMU guest, matching vCPU/RAM/accelerator arguments. Deletion requires proven absence, including the owned Docker network.
 - Disk-growth recovery validates the **already-grown** QCOW2 target and synchronizes metadata only; it never resizes again.
-- External recovery reads the durable operation and, if the agent itself crashed, invokes its authenticated inspection endpoint. Busy/incomplete/ambiguous evidence keeps the reservation uncertain. Reinstall and ambiguous policy transitions still require manual inspection.
+- External recovery reads the durable operation and, if the agent itself crashed, invokes its authenticated inspection endpoint. Busy/incomplete/ambiguous evidence keeps the reservation uncertain. Reinstall recovery requires the pending unique management-key generation, proven stopped resources and completed backup cleanup; ambiguous transitions remain uncertain and require manual inspection.
 
 After verifying and removing **all** leftover resources for a failed job, an operator can release its reservation:
 
@@ -240,7 +244,7 @@ python skvm.py resolve-job JOB_UUID --confirm-no-resource
 
 That command is a manual assertion, not proof that a resource is absent; never use it to bypass inspection. External-agent interrupted operations also retain their encrypted request and uncertain state; let inspection reconcile a proven result, or inspect/recover that node's storage and operation database before manually resolving the panel job. No destructive automatic rollback is attempted across a network partition.
 
-Workspace suspension terminates running processes; disk files survive ordinary restart. Deleting a Codespace can delete its workspace. Back up stopped guests, SQLite (using SQLite's backup API or after stopping writers), `data/.session-key`, and `data/.encryption-key` together. Do not copy a live QCOW2 disk as a crash-consistent backup. Schema v1 uses `create_all`; future incompatible schema changes need an explicit migration, not deletion of the DB.
+Workspace suspension terminates running processes; disk files survive ordinary restart. Deleting a Codespace can delete its workspace. Back up stopped guests, SQLite (using SQLite's backup API or after stopping writers), `data/.session-key`, and `data/.encryption-key` together. Do not copy a live QCOW2 disk as a crash-consistent backup. Schema initialization/migration is additive; incompatible changes require an explicit migration, never database deletion.
 
 ## Tests and compatibility checks
 
@@ -260,12 +264,12 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-Browser tests use their **own temporary DB and port 5558**, not `database/skvm.db`. The desktop and Android-emulation journeys include registration, live charts, connected create/console/profile/settings pages, admin plan/user/node/image/policy controls, password/session revocation and logout. Their private fixture credentials are random, and test mode refuses actual provisioning.
+Browser tests use **separate temporary databases** on ports 5558/5559, never the live panel database. Desktop and Android-emulation journeys cover user registration/isolation, denied user creation, admin assignee selection, account/plan/node/catalog/settings controls, the non-blocking password reminder and session revocation. SSHX browser journeys use a clearly synthetic SSH-protocol server to test actual backend key authentication, enrollment, polling, link display/copy/stop and foreign-owner denial. They never execute an OS shell or installer and are **not** native guest/SSHX evidence.
 
 Unit tests isolate engine/transport boundaries explicitly. **Separate native acceptance** exercises the real Flask routes, one-use confirmation, durable jobs and actual background consumers:
 
 - Actual standalone QCOW2/CIDATA, TCG process/QMP, duplicate-start protection, growth and deletion.
-- A trusted-pin Ubuntu 24.04 **TCG** boot, real cloud-init and SSH key authentication, guest-visible 768 MiB/1 vCPU and disk growth to 11 GiB, suspension policy, persistence, reinstall, force stop and deletion.
+- A trusted-pin Ubuntu 24.04 **TCG** boot, real cloud-init and SSH key authentication, guest-visible 768 MiB/1 vCPU and disk growth to 11 GiB, suspension policy, persistence, reinstall, force stop and deletion; actual guest SSHX installation/link display/stop before and after reinstall, including stale PID and orphan-client recovery.
 - Actual Docker memory/CPU/PID limits, isolation/internal network, writable-layer telemetry and lifecycle/persistence.
 - Panel → real TLS/bearer agent → actual agent worker → real Docker guest, with separate databases and inventory/diagnostic/deletion checks. Only TCP dialing is routed to an ephemeral loopback port; TLS, HTTP, engines and resources are not mocked.
 
@@ -278,9 +282,9 @@ See [the execution report, limitations and equipped-host commands](docs/testing.
 ```text
 skvm.py / config.py / config.json / requirements.txt
 engines/       qemu_engine.py, docker_engine.py, node_engine.py
-services/      provisioning, cgroups, resource_monitor, recovery, node_protocol, validation, ...
-models/        user, vps/jobs/audit/images/settings, plan, node/agent records
-routes/        auth, dashboard, vps, admin, api, standalone node_api
+services/      provisioning, guest_ssh/keys/access, sshx, guest process control, capacity/recovery, ...
+models/        user, vps/jobs/audit/images/settings, plan, node/agent, encrypted guest access/SSHX
+routes/        auth, admin/user dashboards, vps, sshx, admin, api, standalone node_api
 templates/     all connected pages, confirmations, job views, setup guide
 static/        compiled Tailwind + custom CSS, JS, local icons/chart/font dependencies
 scripts/       installation, environment/TCG checks, asset build

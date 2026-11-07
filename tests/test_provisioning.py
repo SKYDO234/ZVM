@@ -1,4 +1,5 @@
 import uuid
+import hashlib
 from unittest.mock import Mock
 import pytest
 from engines import EngineError
@@ -38,7 +39,9 @@ def test_allocation_is_never_host_capacity(client, users, monkeypatch):
     result = client.get('/api/metrics').json
     assert result['instances'][0]['allocation'] == {'ram_mb':2048,'vcpus':2,'disk_gb':20}
     assert result['totals']['ram_mb'] == 2048 and result['totals']['disk_gb'] == 20
-    assert result['host']['ram_total_mb'] > 0
+    assert 'host' not in result
+    admin = client.application.test_client(); signin(admin, users[2].email)
+    assert admin.get('/api/metrics').json['host']['ram_total_mb'] > 0
     assert result['instances'][0]['usage']['disk_actual_bytes'] == 12345
     assert client.get(f'/vps/{vps.id}').status_code == 200
 
@@ -82,23 +85,24 @@ def test_test_mode_cannot_create_records(app, users):
 
 def test_real_boundary_failure_never_creates_vps(users,monkeypatch):
     data=spec(users[0]);job=Job(id=str(uuid.uuid4()),owner_id=users[0].id,instance_id=data['id'],kind='create',engine='qemu',
-                               ram_mb=2048,vcpus=2,disk_gb=20,payload=encrypt({'spec':data,'credentials':{}}))
+                               ram_mb=2048,vcpus=2,disk_gb=20,payload=encrypt({'spec':data,'credentials':{},'actor_id':users[2].id}))
     db.session.add(job);db.session.commit()
     monkeypatch.setattr('services.provisioning.capacity_check',lambda *a,**kw:None)
     engine=Mock();engine.create.side_effect=EngineError('Actual engine could not run.')
     monkeypatch.setattr('services.provisioning.engine_for',lambda *a:engine)
     process_job(job.id)
     assert db.session.get(Job,job.id).status == 'failed'
+    engine.create.assert_called_once()
     assert db.session.get(VPS,data['id']) is None
 
 
 def test_record_is_inserted_only_after_explicit_mock_boundary_success(users,monkeypatch):
     # Unit-only fake engine boundary. Not a demo mode and never used by the running application.
     data=spec(users[0]);job=Job(id=str(uuid.uuid4()),owner_id=users[0].id,instance_id=data['id'],kind='create',engine='qemu',
-                               ram_mb=2048,vcpus=2,disk_gb=20,payload=encrypt({'spec':data,'credentials':{}}))
+                               ram_mb=2048,vcpus=2,disk_gb=20,payload=encrypt({'spec':data,'credentials':{},'actor_id':users[2].id}))
     db.session.add(job);db.session.commit()
     monkeypatch.setattr('services.provisioning.capacity_check',lambda *a,**kw:None)
-    engine=Mock();engine.create.return_value={'status':'stopped','runtime':{'provisioned':True},'ssh_port':22555}
+    engine=Mock();engine.create.side_effect=lambda s,c,**kw: {'status':'stopped','runtime':{'provisioned':True, 'control_key_sha256':hashlib.sha256(c['control_public_key'].encode()).hexdigest()},'ssh_port':22555}
     monkeypatch.setattr('services.provisioning.engine_for',lambda *a:engine)
     process_job(job.id)
     vps=db.session.get(VPS,data['id'])
@@ -109,7 +113,7 @@ def test_record_is_inserted_only_after_explicit_mock_boundary_success(users,monk
 
 def test_missing_dependency_error_is_visible_without_fake_vps(client,users,monkeypatch):
     monkeypatch.setattr('engines.qemu_engine.shutil.which',lambda name:None)
-    signin(client)
+    signin(client,'operator@example.test')
     response=post(client,'/vps/create',{'name':'not-created','engine':'qemu','os_id':'ubuntu-24.04','ram_mb':512,'vcpus':1,
                   'disk_gb':8,'username':'ubuntu','auth_method':'password','guest_password':'Valid-guest-password!'},token_path='/vps/create')
     assert response.status_code==200

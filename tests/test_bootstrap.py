@@ -115,7 +115,7 @@ def test_initial_login_opens_dashboard_and_shows_nonblocking_reminder(app, clien
     assert any(form.get('action') == '/sessions/revoke' for form in profile.iter('form'))
 
 
-@pytest.mark.parametrize('path', ['/dashboard', '/admin', '/settings', '/vps', '/vps/create', '/vps/console', '/profile', '/docs'])
+@pytest.mark.parametrize('path', ['/dashboard', '/admin', '/settings', '/vps', '/vps/create', '/user', '/profile', '/docs'])
 def test_initial_password_can_navigate_all_panel_routes(app, client, path):
     bootstrap_admin()
     initial_login(client)

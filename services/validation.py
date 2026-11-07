@@ -37,6 +37,10 @@ def clean_spec(data, user_id):
             'runtime': {}, 'forwards': [], 'allow_unenforced_storage': data.get('allow_unenforced_storage') in ('1', True)}
     credentials = {}
     if engine == 'qemu':
+        mode = data.get('network_mode', 'restricted' if s['restrict_guest_network'] else 'internet')
+        if mode not in ('restricted', 'internet'):
+            raise EngineError('Choose restricted networking or outbound internet.')
+        spec['network_restricted'] = mode == 'restricted'
         username = str(data.get('username', '')).strip()
         if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,30}', username) or username in ('root', 'daemon', 'nobody', 'bin', 'sys', 'sync', 'shutdown', 'halt'):
             raise EngineError('Use a non-system Linux username (1–31 lowercase letters, digits, underscores or hyphens). Root login is disabled.')
@@ -74,10 +78,10 @@ def quota_check(user, spec, exclude_job=None, resize_of=None):
     instances = list(db.session.scalars(db.select(VPS).where(VPS.owner_id == user.id)))
     jobs = list(db.session.scalars(db.select(Job).where(
         Job.status.in_(['queued', 'running', 'uncertain']),
-        ((Job.kind == 'create') & (Job.owner_id == user.id)) |
+        ((Job.kind.in_(['create', 'assign'])) & (Job.owner_id == user.id)) |
         ((Job.kind == 'resize') & Job.instance_id.in_(db.select(VPS.id).where(VPS.owner_id == user.id))))))
     jobs = [j for j in jobs if j.id != exclude_job]
-    if not resize_of and len(instances) + sum(j.kind == 'create' for j in jobs) >= lim['max_instances']:
+    if not resize_of and len(instances) + sum(j.kind in ('create', 'assign') for j in jobs) >= lim['max_instances']:
         raise EngineError(f'Instance quota reached ({lim["max_instances"]}). Pending or uncertain jobs reserve capacity too.')
     for key, title in [('ram_mb', 'RAM'), ('vcpus', 'vCPU'), ('disk_gb', 'Disk')]:
         requested = spec[key] if not resize_of else (spec[key] - getattr(resize_of, key))

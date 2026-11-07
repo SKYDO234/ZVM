@@ -43,7 +43,7 @@ def rate_limit(email, registration=False):
 @bp.route('/register', methods=['GET', 'POST'])
 def register():
     if current_user.is_authenticated:
-        return redirect(url_for('dashboard.index'))
+        return redirect(url_for('dashboard.index' if current_user.is_admin else 'dashboard.user_index'))
     if not settings()['registration_enabled']:
         return render_template('error.html', code=403, message='Registration is disabled. Ask your operator for an account.'), 403
     if request.method == 'POST':
@@ -66,7 +66,7 @@ def register():
             login_user(user)
             session.permanent = True
             flash('Account created. Welcome to your workspace.', 'success')
-            return redirect(url_for('dashboard.index'))
+            return redirect(url_for('dashboard.index' if current_user.is_admin else 'dashboard.user_index'))
         except IntegrityError:
             db.session.rollback()
             flash('Unable to register this email. Try signing in or contact your operator.', 'error')
@@ -78,7 +78,7 @@ def register():
 @bp.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('dashboard.index'))
+        return redirect(url_for('dashboard.index' if current_user.is_admin else 'dashboard.user_index'))
     if request.method == 'POST':
         try:
             identifier = request.form.get('email', '').strip().lower()
@@ -104,7 +104,7 @@ def login():
             except ValueError:
                 next_url, target = '', urlsplit('')
             if target.scheme or target.netloc or not next_url.startswith('/') or next_url.startswith('//') or '\\' in next_url:
-                next_url = url_for('dashboard.index')
+                next_url = url_for('dashboard.index' if user.is_admin else 'dashboard.user_index')
             return redirect(next_url)
         except EngineError as exc:
             flash(str(exc), 'error')
@@ -114,8 +114,6 @@ def login():
 @bp.post('/logout')
 @login_required
 def logout():
-    from services.webssh_access import revoke_browser_sessions
-    revoke_browser_sessions()
     audit('auth.logout', 'Signed out.', current_user.id)
     db.session.commit()
     logout_user()
