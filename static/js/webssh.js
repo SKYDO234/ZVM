@@ -202,7 +202,18 @@
   $('ssh-instance-select').addEventListener('change', event => { disconnect(); location.assign(event.target.value); });
   connectButton.addEventListener('click', () => { clearCredentials(); authDialog.showModal(); ($('ssh-auth-method').value === 'key' ? $('ssh-private-key') : $('ssh-password')).focus(); });
   disconnectButton.addEventListener('click', disconnect);
-  $('ssh-clear').addEventListener('click', () => { terminal.clear(); terminal.write('\x1b[2J\x1b[H'); if (connected) terminal.focus(); });
+  $('ssh-clear').addEventListener('click', () => {
+    terminal.write('\x1b[2J\x1b[H', () => {
+      terminal.clear();
+      // Flush pending screen-reader announcements as well as visible rows.
+      // xterm's clear() alone leaves its asynchronous live-region readback.
+      if (terminal.options.screenReaderMode) {
+        terminal.options.screenReaderMode = false;
+        terminal.options.screenReaderMode = true;
+      }
+      if (connected) terminal.focus();
+    });
+  });
   $('ssh-auth-method').addEventListener('change', chooseAuth);
   $('ssh-auth-cancel').addEventListener('click', () => connecting ? disconnect() : authDialog.close());
   $('ssh-auth-back').addEventListener('click', () => connecting ? disconnect() : authDialog.close());

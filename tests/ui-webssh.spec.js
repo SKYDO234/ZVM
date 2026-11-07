@@ -33,8 +33,12 @@ async function typeIntoTerminal(page, text) {
 }
 
 test('password SSH terminal, host fingerprint, measured RTT, input, resize, special keys, clear and disconnect', async ({page}, testInfo) => {
-  const errors = [];
+  const errors = [], terminalInputs = [];
   page.on('pageerror', error => errors.push(error.message));
+  page.on('websocket', ws => ws.on('framesent', frame => {
+    const data = JSON.parse(frame.payload.toString());
+    if (data.type === 'input') terminalInputs.push(data.data);
+  }));
   const fixtures = await openPage(page, testInfo.project.name);
   await page.locator('#ssh-connect').click();
   await page.locator('#ssh-password').fill(fixtures.guest_password);
@@ -56,8 +60,11 @@ test('password SSH terminal, host fingerprint, measured RTT, input, resize, spec
   await expect(page.locator('#ssh-terminal')).toContainText('PTY dimensions:');
   const dimensions = (await page.locator('#ssh-size').textContent()).replace(' × ', 'x');
   await expect(page.locator('#ssh-terminal')).toContainText('PTY dimensions: ' + dimensions);
+  const inputsBeforeClear = terminalInputs.length;
   await page.locator('#ssh-clear').click();
   await expect(page.locator('#ssh-terminal')).not.toContainText(marker);
+  await expect(page.locator('#ssh-terminal .live-region')).toHaveText('');
+  expect(terminalInputs.length).toBe(inputsBeforeClear); // Local view only, no guest command.
   await page.locator('#ssh-disconnect').click();
   await expect(page.locator('#ssh-status')).toHaveText('Disconnected');
   await expect(page.locator('#ssh-connect')).toBeEnabled();
