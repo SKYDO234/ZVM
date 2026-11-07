@@ -37,7 +37,7 @@ python node_agent.py
 The standalone agent exposes **only** `/v1/` machine endpoints; panel registration/login/admin routes are not registered. It binds **127.0.0.1:5556**, because a raw bearer-token HTTP port must not be forwarded publicly. The persistent operation worker starts with it. For a WSGI process on the node:
 
 ```bash
-.venv/bin/gunicorn --bind 127.0.0.1:5556 --workers 1 --threads 4 --timeout 60 'node_agent:create_agent()'
+.venv/bin/gunicorn --bind 127.0.0.1:5556 --workers 1 --threads 16 --timeout 60 'node_agent:create_agent()'
 ```
 
 This starts the agent worker via its factory, with a workspace leader lock. A supervisor can be a container's normal process manager, tmux, or an operator-managed init system; SKVM has no dependency on systemd.
@@ -47,6 +47,11 @@ This starts the agent worker via its factory, with a workspace leader lock. A su
 Use your existing valid TLS certificate, domain and reverse proxy. Example nginx server **after** obtaining a certificate normally (do not paste private keys into the panel):
 
 ```nginx
+# Place this map in nginx's http context, outside the server block.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
 server {
     listen 443 ssl;
     server_name compute.example.org;
@@ -58,11 +63,18 @@ server {
         proxy_pass http://127.0.0.1:5556;
         proxy_set_header Host $host;
         proxy_set_header Authorization $http_authorization;
-        proxy_read_timeout 30s;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
+        proxy_read_timeout 75s;
+        proxy_send_timeout 75s;
     }
     location / { return 404; }
 }
 ```
+
+For **WebSSH**, update/restart both ends, keep at least 16 agent threads, and preserve the WebSocket Upgrade headers above. The browser uses the panel's same-origin WebSocket; the panel opens verified WSS to the node, which connects only to its own managed guest. There is no panel-localhost fallback. Updated agents advertise `webssh.protocol_version: 1`; older agents show an explicit unsupported message. [WebSSH security/usage](webssh.md).
 
 Keep 5556 firewalled/loopback-only. Restrict 443 access to the control plane/VPN where practical. For a private CA, set `SKVM_NODE_CA_BUNDLE=/secure/path/to/node-ca.pem` on the panel and restart, or install the root into its trusted Python certificate chain; **do not disable certificate verification**. The panel only allows exact HTTPS origins on port 443, rejects redirects with tokens, and checks its environment-configured allowlist. It deliberately permits allowlisted private node hostnames; OS-image downloads separately reject private network addresses.
 
@@ -93,6 +105,7 @@ All endpoints require `Authorization: Bearer <node-token>` and JSON. They never 
 | `GET /v1/instances/<uuid>` | Instance `id`, exact configured `allocation`, actual engine state, process/cgroup usage and storage enforcement |
 | `GET /v1/instances/<uuid>/console` | Real guest serial output or container logs |
 | `POST /v1/instances/<uuid>/console` | Bounded guest serial input / allowlisted in-container diagnostic |
+| `GET /v1/instances/<uuid>/webssh` (WebSocket upgrade) | Bearer-only, no browser Origin; version-1 bounded JSON connect/trust/input/output/resize protocol and real guest SSH PTY. Expected managed identity/allocations must match the agent record. TLS on 443 is mandatory outside loopback. |
 
 Creation schema (example describes a request, **not an actual provisioned VM**):
 

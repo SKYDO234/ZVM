@@ -35,6 +35,14 @@ def _ssh(key,port,command,timeout=30):
                           capture_output=True,text=True,timeout=timeout,check=False)
 
 
+def _host_fingerprints(key,port):
+    result=_ssh(key,port,'for key in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$key" -E sha256; done')
+    assert result.returncode==0,result.stderr
+    fingerprints=set(re.findall(r'SHA256:[A-Za-z0-9+/]{43}',result.stdout))
+    assert fingerprints
+    return fingerprints
+
+
 def _wait_for_ssh(key,port,deadline=420):
     end=time.monotonic()+deadline;reason='SSH has not responded.'
     while time.monotonic()<end:
@@ -79,6 +87,10 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         status=json.loads(cloud.stdout)
         assert status.get('status')=='done' and not status.get('errors'),status
         report['phase']='cloud-init-complete'
+        report['phase']='webssh-pty-verification'
+        panel.webssh(key,_host_fingerprints(key,data['ssh_port']))
+        assert panel.metrics()['status']=='running'
+        report['webssh']={'authenticated':True,'verified_host_key':True,'pty_cols':111,'pty_rows':37,'guest_identity':'skvmcheck'}
         report['cloud_init']={'status':status['status'],'errors':status.get('errors',[])}
         guest=_ssh(key,data['ssh_port'],"id -un; getconf _NPROCESSORS_ONLN; grep '^MemTotal:' /proc/meminfo; cat /etc/os-release")
         assert guest.returncode==0 and guest.stdout.splitlines()[:2]==['skvmcheck','1']
@@ -110,6 +122,9 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         panel.action('reinstall',{'os_id':image.id,'username':'skvmcheck','auth_method':'key','public_key':public})
         data=panel.spec();(key.parent/'known_hosts').unlink(missing_ok=True)
         panel.action('start');_wait_for_ssh(key,data['ssh_port'])
+        report['phase']='webssh-reinstall-key-verification'
+        panel.webssh(key,_host_fingerprints(key,data['ssh_port']),expect_changed=True)
+        report['webssh']['reinstall_changed_key_confirmed']=True
         absent=_ssh(key,data['ssh_port'],'test ! -e ~/skvm-persistence-check')
         assert absent.returncode==0
         report['phase']='reinstall-verified'

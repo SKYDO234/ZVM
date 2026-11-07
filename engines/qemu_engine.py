@@ -351,6 +351,36 @@ class QemuEngine:
         return {'status': state, 'usage': usage,
                 'storage_enforced': True, 'accel': spec.get('runtime', {}).get('accel', 'tcg')}
 
+    def ssh_endpoint(self, spec):
+        """Prove this forward belongs to the actual guest, never a host SSH daemon.
+
+        A DB port or an open TCP port alone isn't proof of guest identity. Check
+        exact QEMU process identity, its real -netdev argument, owned listener
+        and live QMP state. Call again after key exchange, before SSH auth.
+        """
+        if current_app.config['TEST_MODE']:
+            raise EngineError('WebSSH cannot connect to real guests in test mode.')
+        process = self._process(spec)
+        if not process:
+            raise EngineError('The managed QEMU VM is not running. Start it first; use Console to inspect boot progress.')
+        port = spec.get('ssh_port')
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise EngineError('The VM has no valid managed SSH forward.')
+        forward = f'hostfwd=tcp:127.0.0.1:{port}-:22'
+        try:
+            command = process.cmdline()
+            netdevs = [command[i + 1] for i, value in enumerate(command[:-1]) if value == '-netdev']
+            if not any(forward in value.split(',') for value in netdevs):
+                raise EngineError('The running QEMU process does not own the configured guest SSH forward. Refusing a host connection.')
+            listeners = process.net_connections(kind='tcp')
+            if not any(c.status == psutil.CONN_LISTEN and c.laddr.ip == '127.0.0.1' and c.laddr.port == port for c in listeners):
+                raise EngineError('Cannot prove that the SSH listener belongs to this QEMU VM. No host connection was attempted.')
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError) as exc:
+            raise EngineError('Cannot verify the QEMU-owned SSH listener. Check process permissions on its node.') from exc
+        if self._qmp(spec, 'query-status').get('running') is not True:
+            raise EngineError('The QEMU guest is paused or not running. Resume/start it before using WebSSH.')
+        return '127.0.0.1', port
+
     def console(self, spec):
         path = instance_dir(spec['id']) / 'serial.log'
         if not path.exists():

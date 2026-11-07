@@ -6,7 +6,7 @@
 <aside class="sidebar" id="sidebar"><a class="brand" href="{{ url_for('dashboard.index') }}"><span class="brand-symbol">{{ icon('layers-3') }}</span><span>SKVM<span class="brand-dot">.</span></span><span class="brand-label">PANEL</span></a>
 <div class="workspace-selector"><span class="workspace-logo">{{ icon('blocks') }}</span><div><strong>Personal workspace</strong><small>Infrastructure control</small></div></div>
 <div class="nav-label">WORKSPACE</div><nav class="main-nav" aria-label="Main navigation">
-{% set links=[('dashboard.index','layout-dashboard','Overview'),('vps.create','circle-plus','Create VPS'),('vps.listing','server','My VPS'),('vps.console','square-terminal','Console')] %}
+{% set links=[('dashboard.index','layout-dashboard','Overview'),('vps.create','circle-plus','Create VPS'),('vps.listing','server','My VPS'),('vps.console','square-terminal','Console'),('webssh.page','terminal','WebSSH')] %}
 {% for endpoint,symbol,label in links %}<a href="{{ url_for(endpoint) }}" class="nav-item {{ 'active' if request.endpoint == endpoint else '' }}">{{ icon(symbol) }}<span>{{ label }}</span>{% if endpoint=='vps.create' %}<span class="nav-plus">+</span>{% endif %}</a>{% endfor %}
 <div class="nav-label">ACCOUNT</div>
 <a class="nav-item {{ 'active' if request.endpoint=='auth.profile' }}" href="{{ url_for('auth.profile') }}">{{ icon('user-round') }}<span>Profile</span></a><a class="nav-item {{ 'active' if request.endpoint=='dashboard.preferences' }}" href="{{ url_for('dashboard.preferences') }}">{{ icon('settings-2') }}<span>Settings</span></a>

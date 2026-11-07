@@ -17,7 +17,7 @@ import secrets
 from flask import Flask, jsonify, render_template, request
 from flask_wtf.csrf import CSRFError
 from config import configuration
-from extensions import csrf, db, login
+from extensions import csrf, db, login, sock
 from models import Job, User
 
 
@@ -32,6 +32,7 @@ def create_app(overrides=None):
     db.init_app(app)
     login.init_app(app)
     csrf.init_app(app)
+    sock.init_app(app)
     login.session_protection = 'strong'
 
     @login.user_loader
@@ -77,8 +78,8 @@ def create_app(overrides=None):
         app.register_blueprint(node_api)
         csrf.exempt(node_api)  # Bearer-authenticated machine API; never accepts browser cookie authentication.
     else:
-        from routes import admin, api, auth, dashboard, vps
-        for module in (auth, dashboard, vps, admin, api):
+        from routes import admin, api, auth, dashboard, vps, webssh
+        for module in (auth, dashboard, vps, admin, api, webssh):
             app.register_blueprint(module.bp)
 
     @app.context_processor

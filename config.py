@@ -59,6 +59,12 @@ def configuration():
         NODE_HOSTS=[h.strip().lower() for h in os.getenv('SKVM_NODE_HOSTS', '').split(',') if h.strip()],
         NODE_TOKEN=os.getenv('SKVM_NODE_TOKEN'),
         NODE_CA_BUNDLE=os.getenv('SKVM_NODE_CA_BUNDLE'),
+        WEBSSH_ENABLED=os.getenv('SKVM_WEBSSH_ENABLED', '1') == '1',
+        WEBSSH_MAX_SESSIONS=8,
+        WEBSSH_PER_USER_SESSIONS=2,
+        WEBSSH_IDLE_SECONDS=600,
+        WEBSSH_MAX_SECONDS=3600,
+        SOCK_SERVER_OPTIONS={'ping_interval': 25, 'max_message_size': 96 * 1024},
         NODE_AGENT=False,
         START_WORKER=False,
     )

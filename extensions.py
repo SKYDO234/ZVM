@@ -1,6 +1,7 @@
 from flask_login import LoginManager
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import CSRFProtect
+from flask_sock import Sock
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
@@ -8,6 +9,7 @@ db = SQLAlchemy()
 login = LoginManager()
 login.login_view = 'auth.login'
 csrf = CSRFProtect()
+sock = Sock()
 
 
 @event.listens_for(Engine, 'connect')

@@ -114,6 +114,8 @@ def login():
 @bp.post('/logout')
 @login_required
 def logout():
+    from services.webssh_access import revoke_browser_sessions
+    revoke_browser_sessions()
     audit('auth.logout', 'Signed out.', current_user.id)
     db.session.commit()
     logout_user()

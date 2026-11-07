@@ -123,7 +123,7 @@ python3 -m venv "$ROOT/.venv"
 "$ROOT/.venv/bin/python" -m pip install -r "$ROOT/requirements.txt"
 npm ci --include=dev --no-audit --no-fund
 npm run build:assets
-[[ -s static/css/tailwind.css && -s static/css/app.css && -s static/vendor/lucide.min.js && -s static/vendor/chart.umd.js && -s static/fonts/inter-latin-variable.woff2 ]] || { echo 'ERROR: Frontend assets were not built.' >&2; exit 1; }
+[[ -s static/css/tailwind.css && -s static/css/app.css && -s static/vendor/lucide.min.js && -s static/vendor/chart.umd.js && -s static/fonts/inter-latin-variable.woff2 && -s static/vendor/xterm.js && -s static/vendor/xterm.css && -s static/vendor/xterm-addon-fit.js && -s static/vendor/xterm-addon-web-links.js && -s static/fonts/jetbrains-mono-latin-variable.woff2 ]] || { echo 'ERROR: Frontend assets were not built.' >&2; exit 1; }
 
 # Never source .env as shell. Python's dotenv loader reads it as data and preserves it.
 if [[ ! -e .env ]]; then
