@@ -111,7 +111,7 @@ class NativePanel:
                 response = guest(f'kill -0 {int(blocker)}')
                 assert response.returncode == 0, 'SSHX stop signalled an unrelated guest process.'
                 # Independent OS observation, not just the cleared panel row.
-                response = guest(f'test ! -e /proc/{client_pid}/exe')
+                response = guest(f"""test ! -e /proc/{client_pid}/stat || test "$(awk '{{print $3}}' /proc/{client_pid}/stat 2>/dev/null)" = Z""")
                 assert response.returncode == 0, 'The actual SSHX client remained live after Stop SSHX.'
         finally:
             if blocker is not None:
