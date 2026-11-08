@@ -95,6 +95,7 @@ All endpoints require `Authorization: Bearer <node-token>` and JSON. They never 
 | `POST /v1/operations` | Queue validated operation; returns persistent `id`, `status` and HTTP 202 |
 | `GET /v1/operations/<uuid>` | `queued/running/completed/failed/uncertain`; completed `result` or controlled `error` |
 | `POST /v1/operations/<uuid>/reconcile` | Inspect an **uncertain** operation under nonblocking capacity/control locks; apply a proven result without replaying the mutation. Returns 409 for busy/incomplete/ambiguous evidence |
+| `POST /v1/operations/<uuid>/close-power` | Inspect only an uncertain basic power request under nonblocking operation/capacity/control locks; prove stable owned running/stopped state, retain instance/allocation and record failed/unconfirmed—not success. Rejects storage/provisioning/SSHX, live work and ambiguous evidence. Upgrade/restart both ends. |
 | `GET /v1/instances/<uuid>` | Instance `id`, exact configured `allocation`, actual engine state, process/cgroup usage and storage enforcement |
 | `POST /v1/instances/<uuid>/sshx` | Stateless fixed guest actions: `probe`, `verify`, `enroll`, `generate`, `stop`, `inspect`, `inspect_stop`. Exact managed target must match. Bearer only, browser Origin rejected, sensitive response capped at 64 KiB. No arbitrary host/port/user/command fields. |
 

@@ -42,19 +42,22 @@ def main():
     for session in (first, other):
         response = sign_in(session, 'admin123')
         assert response.status_code == 302 and urlsplit(response.headers['Location']).path == '/dashboard'
-    for path in ('/dashboard', '/admin', '/vps/create', '/vps', '/user', '/settings', '/profile', '/docs'):
+    for path in ('/dashboard', '/admin', '/admin/users', '/admin/instances', '/admin/plans', '/admin/nodes',
+                 '/admin/images', '/admin/configuration', '/admin/jobs', '/admin/recovery', '/admin/audit',
+                 '/vps/create', '/vps', '/user', '/settings', '/profile', '/docs'):
         response = first.get(base + path, allow_redirects=False, timeout=10)
         assert response.status_code == 200, (path, response.status_code)
-        assert 'data-initial-password-reminder' in response.text
+        assert 'data-initial-password-reminder' in response.text, path
     response = first.get(base + '/api/metrics', timeout=10)
     assert response.status_code == 200 and response.json()['totals']['count'] == 0
     assert first.get(base + '/api/activity', timeout=10).status_code == 200
     response = first.post(base + '/vps/create', data={'csrf_token': token(first, '/vps/create'), 'name': 'invalid-without-engine'}, allow_redirects=False, timeout=10)
     assert response.status_code == 200  # Real validation error, never a bounce to Profile.
-    response = first.post(base + '/admin/plans', data={'csrf_token': token(first, '/admin'), 'name': 'Installer acceptance plan',
+    response = first.post(base + '/admin/plans', data={'csrf_token': token(first, '/admin/plans'), 'name': 'Installer acceptance plan',
                           'max_instances': '2', 'ram_mb': '1024', 'vcpus': '1', 'disk_gb': '16'}, allow_redirects=False, timeout=10)
-    assert response.status_code == 302 and urlsplit(response.headers['Location']).path == '/admin'
-    assert 'Installer acceptance plan' in first.get(base + '/admin', timeout=10).text
+    assert response.status_code == 302 and urlsplit(response.headers.get('Location', '')).path == '/admin/plans', (
+        'plan creation must return to its dedicated page', response.status_code, response.headers.get('Location'))
+    assert 'Installer acceptance plan' in first.get(base + '/admin/plans', timeout=10).text
     password = 'Acceptance-' + secrets.token_urlsafe(24)
     response = first.post(base + '/profile', data={'csrf_token': token(first, '/profile'), 'name': 'Installer acceptance',
                           'current_password': 'admin123', 'new_password': password}, allow_redirects=False, timeout=10)

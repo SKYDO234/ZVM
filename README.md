@@ -63,8 +63,8 @@ Only the VM owner or an administrator can generate, view, copy or stop its real 
 Existing installations need updated dependencies and **all old workers restarted**, not a database reset:
 
 ```bash
-bash install.sh --no-start
 .venv/bin/python scripts/serve-panel.py --stop
+bash install.sh --no-start
 .venv/bin/python scripts/serve-panel.py --background
 ```
 
