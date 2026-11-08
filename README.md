@@ -1,4 +1,4 @@
-# SKVM · QEMU + Docker VPS control plane
+# SKVM · QEMU + Docker VPS control panel
 
 A workspace-first Flask management panel for **real QEMU virtual machines** and **separate Docker OS containers**. Dark responsive interface, live measured charts, user accounts, quotas, audit trails, background provisioning, and an authenticated external-node agent.
 
