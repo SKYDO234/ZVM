@@ -12,8 +12,7 @@ from services.validation import capacity_check, quota_check
 from services.guest_ssh import admission, new_key
 from services.guest_access import GuestGuard
 from services import sshx
-
-ACTIVE_JOBS = ['queued', 'running', 'uncertain']
+from services.lifecycle import ACTIVE_JOBS, POWER_ACTIONS, running_result, shutdown_recovery, stop_before_transition
 
 
 def queue_create(user, spec, credentials, node=None):
@@ -56,8 +55,7 @@ def queue_action(user, vps, action, extra=None):
         active = list(db.session.scalars(db.select(Job).where(Job.instance_id == vps.id, Job.status.in_(ACTIVE_JOBS))))
         # A proven VM shutdown safely ends even an unreported SSHX client. Never
         # relax locks/reservations for uncertain create/storage/lifecycle work.
-        if any(not (j.status == 'uncertain' and j.kind in ('sshx_generate', 'sshx_stop')
-                    and action in ('stop', 'force_stop', 'suspend')) for j in active):
+        if any(not shutdown_recovery(j, action) for j in active):
             raise EngineError('An active or uncertain job already exists for this instance. Wait or ask an administrator to reconcile it.')
         extra = dict(extra or {})
         extra.update(actor_id=user.id, actor_tag=user.get_id())
@@ -96,9 +94,11 @@ def queue_action(user, vps, action, extra=None):
             private, public = new_key()
             extra['credentials'] = dict(extra['credentials'], control_public_key=public)
             extra['control_private_key'] = private
-        # The assigned owner must be able to poll/view SSHX work requested by an
-        # administrator. The encrypted actor/tag still authorize that requester.
-        job_owner = assignee.id if assignee else (vps.owner_id if action in ('sshx_generate', 'sshx_stop') else user.id)
+        # Assigned owners can poll/view power and SSHX work requested by an
+        # administrator. The encrypted actor/tag still authorize that requester;
+        # growth reservation accounting remains unchanged.
+        owner_visible = action in (*POWER_ACTIONS, 'sshx_generate', 'sshx_stop')
+        job_owner = assignee.id if assignee else (vps.owner_id if owner_visible else user.id)
         job = Job(id=str(uuid.uuid4()), owner_id=job_owner, instance_id=vps.id, node_id=vps.node_id,
                   kind=action, engine=vps.engine, ram_mb=vps.ram_mb if assignee else 0,
                   vcpus=vps.vcpus if assignee else 0, disk_gb=vps.disk_gb if assignee else growth, payload=encrypt(extra))
@@ -137,7 +137,10 @@ def _apply_result(job, payload, result):
     else:
         vps = db.session.get(VPS, job.instance_id)
         if vps:
-            if job.kind in ('start', 'stop', 'restart', 'force_stop', 'suspend', 'delete', 'reinstall', 'network', 'assign'):
+            if (job.kind in ('start', 'stop', 'restart', 'force_stop', 'suspend', 'delete', 'reinstall', 'network', 'assign')
+                    and not (job.kind == 'start' and result.get('already_running') is True)):
+                # An idempotent Start did not stop/restart the guest or its
+                # SSHX client; do not falsely retire an existing capability.
                 sshx.retire(vps.id)
                 if job.kind in ('stop', 'force_stop', 'suspend', 'delete'):
                     for old in db.session.scalars(db.select(Job).where(Job.instance_id == vps.id, Job.kind.in_(['sshx_generate', 'sshx_stop']), Job.status == 'uncertain')):
@@ -175,6 +178,8 @@ def _apply_result(job, payload, result):
     job.status, job.payload = 'completed', None
     if job.kind == 'create':
         job.message = f"Provisioned successfully; current engine state: {result['status']}."
+    elif job.kind == 'start' and result.get('already_running') is True:
+        job.message = 'Already running; no second instance was started.'
     else:
         job.message = f"{job.kind.replace('_', ' ').title()} completed."
     audit(f'{job.kind}.completed', job.message, payload.get('actor_id', job.owner_id), job.instance_id)
@@ -186,9 +191,14 @@ def process_job(job_id):
     if not job or job.status != 'queued':
         return
     mutated = False
+    already_running = None
+    actor_id = None
     try:
         payload = decrypt(job.payload)
-        job.status, job.message = 'running', 'Validating configuration and provisioning with the real engine…'
+        actor_id = payload.get('actor_id', job.owner_id)
+        job.status = 'running'
+        job.message = ('Validating configuration and provisioning with the real engine…' if job.kind == 'create' else
+                       'Validating the lifecycle request and actual managed instance state…')
         db.session.commit()
         user = db.session.get(User, payload.get('actor_id', job.owner_id))
         if not user or not user.enabled:
@@ -232,7 +242,9 @@ def process_job(job_id):
                     if vps.suspended and job.kind in ('start', 'restart', 'reinstall', 'sshx_generate'):
                         raise EngineError('The instance is suspended.')
                     spec = vps.spec()
-                    if job.kind in ('start', 'restart'):
+                    if job.kind == 'start':
+                        already_running = running_result(engine, spec)
+                    if job.kind in ('start', 'restart') and already_running is None:
                         capacity_check(spec, node, resize_of=vps, require_available_ram=job.kind != 'restart')
                     if job.kind in ('suspend', 'unsuspend', 'network', 'assign') and not user.is_admin:
                         raise EngineError('An administrator role is required.')
@@ -246,8 +258,10 @@ def process_job(job_id):
                     new_spec = spec | {'disk_gb': payload['disk_gb']}
                     quota_check(vps.owner, new_spec, resize_of=vps, exclude_job=job.id)
                     capacity_check(new_spec, node, resize_of=vps, exclude_job=job.id, require_available_ram=False)
-                mutated = True
-                if job.kind in ('sshx_generate', 'sshx_stop'):
+                mutated = already_running is None
+                if already_running is not None:
+                    result = already_running
+                elif job.kind in ('sshx_generate', 'sshx_stop'):
                     payload['sshx_started_at'] = utcnow().isoformat()
                     job.payload = encrypt(payload)
                     db.session.commit()
@@ -272,11 +286,17 @@ def process_job(job_id):
                 elif job.kind == 'create':
                     result = engine.create(spec, payload['credentials'], operation_id=job.id)
                 elif job.kind == 'restart' and node is None:
-                    engine.stop(spec, operation_id=job.id)
+                    stop_before_transition(engine, spec, operation_id=job.id)
                     # The old process has released memory. Recheck actual availability now.
                     with locked('allocation'):
                         capacity_check(spec, resize_of=vps, exclude_job=job.id)
                     result = engine.start(spec, operation_id=job.id)
+                elif job.kind == 'delete' and node is None:
+                    # One owner-authorized job, with no implicit Force stop.
+                    # External nodes perform this atomically in their worker;
+                    # never reuse one remote operation ID for stop then delete.
+                    stop_before_transition(engine, spec, operation_id=job.id)
+                    result = engine.delete(spec, operation_id=job.id)
                 elif job.kind == 'suspend':
                     result = engine.stop(spec, operation_id=job.id)
                 elif job.kind == 'unsuspend':
@@ -301,7 +321,7 @@ def process_job(job_id):
         job.message = safe_message(exc) + ('' if mutated else ' No engine mutation was attempted.')
         if not mutated:
             job.payload = None
-        audit('job.uncertain', job.message, job.owner_id, job.instance_id)
+        audit('job.uncertain', job.message, actor_id if actor_id is not None and db.session.get(User, actor_id) else None, job.instance_id)
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
@@ -315,7 +335,7 @@ def process_job(job_id):
             job.status = 'failed'
             job.message = safe_message(exc) if isinstance(exc, EngineError) else 'An internal engine error occurred. Consult the server log; no success was reported.'
             job.payload = None
-        audit('job.failed', job.message, job.owner_id, job.instance_id)
+        audit('job.failed', job.message, actor_id if actor_id is not None and db.session.get(User, actor_id) else None, job.instance_id)
         db.session.commit()
         if not isinstance(exc, EngineError):
             logging.exception('Provisioning job %s failed', job_id)

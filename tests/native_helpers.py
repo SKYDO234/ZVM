@@ -16,16 +16,23 @@ class NativePanel:
     def __init__(self,app):
         self.app=app
         password=secrets.token_urlsafe(24)
-        self.owner=User(name='Native acceptance operator',email='native-operator@example.test',role='admin')
-        self.owner.set_password(password);db.session.add(self.owner);db.session.commit()
-        self.client=app.test_client()
-        result=self.client.post('/login',data={'csrf_token':csrf_token(self.client),'email':self.owner.email,'password':password})
-        assert result.status_code==302
+        self.operator=User(name='Native acceptance operator',email='native-operator@example.test',role='admin')
+        self.operator.set_password(password)
+        self.owner=User(name='Native assigned owner',email='native-owner@example.test',role='user')
+        owner_password=secrets.token_urlsafe(24)
+        self.owner.set_password(owner_password)
+        db.session.add_all([self.operator,self.owner]);db.session.commit()
+        self.admin_client=app.test_client();self.owner_client=app.test_client()
+        for client,user,secret in ((self.admin_client,self.operator,password),(self.owner_client,self.owner,owner_password)):
+            result=client.post('/login',data={'csrf_token':csrf_token(client),'email':user.email,'password':secret})
+            assert result.status_code==302
+        self.client=self.admin_client
         self.ident=None
         start_worker(app)
 
-    def post(self,url,data=None):
-        return self.client.post(url,data={'csrf_token':csrf_token(self.client,'/dashboard'),**(data or {})})
+    def post(self,url,data=None,admin=False):
+        client=self.admin_client if admin else self.client
+        return client.post(url,data={'csrf_token':csrf_token(client,'/dashboard'),**(data or {})})
 
     def finish(self,response,expect='completed'):
         assert response.status_code==302,response.data.decode()[-1000:]
@@ -38,23 +45,32 @@ class NativePanel:
             time.sleep(.1)
         db.session.expire_all();job=db.session.get(Job,ident)
         assert job.status==expect,f'{job.kind}: {job.status}: {job.message}'
+        viewer=self.owner_client if job.owner_id==self.owner.id else self.admin_client
+        assert viewer.get(f'/vps/jobs/{job.id}').status_code==200
+        polled=viewer.get(f'/api/jobs/{job.id}')
+        assert polled.status_code==200 and polled.json['status']==expect
+        assert 'payload' not in polled.json
         return job
 
     def create(self,form):
         before=db.session.scalar(db.select(db.func.count()).select_from(VPS))
-        review=self.post('/vps/create',form)
+        assert self.owner_client.get('/vps/create').status_code==403
+        review=self.post('/vps/create',dict(form,owner_id=str(self.owner.id)),admin=True)
         assert review.status_code==200 and b'Confirm &' in review.data,review.data.decode()[-1500:]
         ticket=db.session.scalar(db.select(ProvisionTicket).where(ProvisionTicket.consumed.is_(False)).order_by(ProvisionTicket.expires_at.desc()))
         assert ticket is not None
         self.ident=decrypt(ticket.payload)['spec']['id']
         assert db.session.get(VPS,self.ident) is None
-        queued=self.post(f'/vps/provision/{ticket.id}')
+        queued=self.post(f'/vps/provision/{ticket.id}',admin=True)
         assert db.session.scalar(db.select(db.func.count()).select_from(VPS))==before
         count=db.session.scalar(db.select(db.func.count()).select_from(Job))
-        duplicate=self.post(f'/vps/provision/{ticket.id}')
+        duplicate=self.post(f'/vps/provision/{ticket.id}',admin=True)
         assert duplicate.status_code==302 and db.session.scalar(db.select(db.func.count()).select_from(Job))==count
         self.finish(queued)
-        assert db.session.get(VPS,self.ident) is not None
+        instance=db.session.get(VPS,self.ident)
+        assert instance is not None and instance.owner_id==self.owner.id
+        self.client=self.owner_client
+        assert self.owner.role=='user' and self.client.get(f'/vps/{self.ident}').status_code==200
         return self.spec()
 
     def spec(self):
@@ -62,7 +78,8 @@ class NativePanel:
         return db.session.get(VPS,self.ident).spec()
 
     def action(self,kind,data=None,expect='completed'):
-        return self.finish(self.post(f'/vps/{self.ident}/action/{kind}',data),expect)
+        admin=kind in ('suspend','unsuspend','network','assign')
+        return self.finish(self.post(f'/vps/{self.ident}/action/{kind}',data,admin=admin),expect)
 
     def metrics(self):
         response=self.client.get(f'/api/vps/{self.ident}/metrics')
@@ -86,6 +103,13 @@ class NativePanel:
         displayed = page.status_code==200 and link.encode() in page.data
         assert displayed, 'The actual guest link was not displayed; secret output intentionally omitted.'
         assert b'referrerpolicy="no-referrer"' in page.data
+        # A stale/repeated Start while this actual guest/client is live must be
+        # a verified no-op, not a duplicate QEMU process or false revocation.
+        ciphertext=row.link_encrypted
+        self.action('start')
+        db.session.expire_all()
+        preserved=db.session.get(SSHXSession,self.ident).link_encrypted==ciphertext
+        assert preserved,'No-op Start unexpectedly retired the live SSHX capability.'
         assert self.client.get(f'/vps/{self.ident}/console').status_code==404
         assert self.client.get(f'/webssh/{self.ident}').status_code==404
         blocker = None

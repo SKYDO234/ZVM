@@ -1,0 +1,5 @@
+{% from '_components.html' import action %}
+{{ action(vps,'start','Start','play','btn-primary',control=metric.controls.start) }}
+{{ action(vps,'stop','Stop','square',confirmation='Request graceful shutdown? A non-responsive guest will not be silently killed.',control=metric.controls.stop) }}
+{{ action(vps,'restart','Restart','rotate-cw',confirmation='Gracefully stop and restart this VPS? If shutdown cannot be verified, no new process will be started.',control=metric.controls.restart) }}
+{{ action(vps,'delete','Delete','trash-2','btn-danger',confirmation='Permanently delete this VPS and all its storage? A running guest will be stopped gracefully first. If shutdown fails, deletion is aborted; Force stop is never used automatically. This cannot be undone.',control=metric.controls.delete) }}

@@ -1,6 +1,15 @@
 # Validation and compatibility boundaries
 
-## Current SSHX / role-separation revision
+## Owner lifecycle repair
+
+The current repair keeps ordinary owners' backend permissions and makes their controls usable: observed-state Start/Stop/Restart, visible confirmed Delete on Details/My VPS, one verified graceful-stop-then-delete job, and owner-visible admin-requested power jobs with requester audit attribution. Already-running Start is an engine-verified no-op that does not demand a second allocation or retire a live SSHX link. Neither restart nor deletion proceeds after failed/unproven shutdown; unknown deletion keeps agent metadata and reservations intact.
+
+- Final local Python suite: **366 passed, 4 skipped, 1 warning in 179.37 s**. The four documented native skips are not compatibility passes. Final focused owner/lifecycle suite: **49 passed in 39.00 s**, including failed/unproven shutdown, retained agent metadata, suspended-owner deletion, Docker NotFound cleanup and correct admin failure-audit attribution.
+- Desktop/Android browser suite: **18 passed in 2.4 minutes**, including ordinary owner Start/Stop/Restart/Delete, confirmation cancellation, foreign-owner denial, live cross-tab button updates, deleted-resource 404 and no mobile overflow/JavaScript errors. The port-5559 engine/SSH fixtures are explicitly synthetic; they never execute a shell or installer.
+- Native QEMU and Docker/TLS-agent tests now create through an admin, assign to a **separate `role=user` account**, then execute owner lifecycle actions and verify job-page/API access. The full-OS test adds owner restart/persistence and deletion of the running guest. **A fresh equipped run is required for these changes; older SSHX runs below do not prove this revised owner flow.**
+- Compile, Ruff `F`, JavaScript syntax and diff checks passed. The locked npm asset build has no unrelated vendor/font changes. No production accounts/guests are inserted by the test harnesses.
+
+## Earlier SSHX / role-separation revision
 
 Console/WebSSH and the WebSocket/xterm implementation have been removed. Their unchanged uploaded design remains a reference, not deployed code. The current feature is **Generate SSHX inside the selected QEMU VM**, encrypted management keys and output links, admin-only creation/assignment, and the separate `/user` workspace. [Usage and trust boundaries](sshx.md).
 
@@ -34,7 +43,7 @@ The four native skips are two opt-in Docker cases, missing local QEMU tools, and
 
 ### Browser fixtures versus native acceptance
 
-`tests/ui_server.py` uses its own temporary DB and test-mode provisioning refusal on port 5558. `tests/sshx_ui_server.py` uses another DB and real SSH fixture on 5559; only its QEMU discovery/metrics boundaries are explicitly replaced. Its marked synthetic links never represent a live relay. Browser coverage includes fingerprint/credential-field enrollment, actual new-key SSH authentication, Generate/poll/Details/copy/stop, safe external-link attributes and foreign-owner denial.
+`tests/ui_server.py` uses its own temporary DB and test-mode provisioning refusal on port 5558. `tests/sshx_ui_server.py` uses another DB and real SSH protocol fixture on 5559, with explicitly replaced QEMU discovery, lifecycle/metrics and capacity boundaries. Its in-memory engine state machine executes no OS commands, and its marked synthetic links never represent a live relay. Browser coverage includes fingerprint/credential-field enrollment, actual new-key SSH authentication, Generate/poll/Details/copy/stop, safe external-link attributes, owner lifecycle controls and foreign-owner denial.
 
 These test-only programs are not application demo/fallback modes and are never the production preview. Android is browser emulation, not physical-device certification.
 
@@ -57,7 +66,7 @@ CI uses its installed Playwright Chromium. Where an equipped local Chromium is a
 
 ### Real Ubuntu / QEMU / SSHX
 
-**Passed on an equipped runner:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source `2c874d858a561d0ab2a2ec15b32a90f55099b399`, completed all six jobs successfully. Its full-OS check reported **1 case, 0 failures/errors, 0 skipped**, including actual guest SSHX installation, captured-link display, stop proof and reinstall/orphan checks. This is current SSHX evidence, not historical WebSSH evidence. Later documentation-only commits do not change the tested application/test source.
+**SSHX-base run, before the owner lifecycle repair:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source `2c874d858a561d0ab2a2ec15b32a90f55099b399`, completed all six jobs successfully. Its full-OS check reported **1 case, 0 failures/errors, 0 skipped**, including actual guest SSHX installation, captured-link display, stop proof and reinstall/orphan checks. This is SSHX rather than historical WebSSH evidence, but it does not establish the newly revised regular-owner lifecycle flow. That repair's final equipped result must be recorded separately above.
 
 To reproduce, install native QEMU/cloud-init/OpenSSH tools on a disposable Linux host; do not require KVM or a privileged guest container. Obtain the image checksum using the distribution-provided Ubuntu cloud-image GPG keyring:
 
@@ -75,7 +84,7 @@ The checksum script validates the vendor HTTPS manifest signature against the **
 - Explicit per-VM outbound internet acknowledgment; actual `curl -sSf https://sshx.io/get | sh` and `sshx` execute **inside that VM only**.
 - The actual CLI link is encrypted, shown on Details and never written into test logs/reports. Independently collected guest host fingerprints match the management connection.
 - Stop SSHX must preserve an unrelated guest sleep even with a corrupted PID record. After reinstall it also tests an orphaned SSHX client after timeout/PID loss.
-- Guest-visible OS/RAM/CPU/disk, data persistence through stop/start/growth to 11 GiB, admin suspension, same-guest reinstall, fresh management key, force stop and deletion.
+- Admin creation/assignment to a separate regular user; owner-visible job page/API, guest-visible OS/RAM/CPU/disk, persistence through owner stop/start/growth to 11 GiB and explicit restart, admin suspension, same-guest owner reinstall, fresh management key, and deletion of the running guest only after verified graceful shutdown. Force stop is separately exercised by native blank-QEMU/Docker tests.
 
 ACPI shutdown can require up to 180 seconds under TCG; tests do not silently force-kill an unresponsive guest. Optional `SKVM_BOOT_REPORT_DIR` stores bounded phase/result JSON and boot-error tails, never disks/private keys/access links. Native acceptance can take many minutes.
 
@@ -105,7 +114,7 @@ All nine retained catalog URLs are range-read and checked for QCOW2 magic. URL/r
 
 The push/PR `tests.yml` workflow covers Python 3.11/3.12, browser, actual installer/blank QEMU, pinned full-OS SSHX and Docker/TLS-agent acceptance. `acceptance.yml` also supports manually selected equipped tests. Missing tools/checksum/daemon fail opted-in acceptance rather than producing a skipped success. Artifacts expire after seven days and exclude keys/disks/access links.
 
-**Current acceptance:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source **`2c874d858a561d0ab2a2ec15b32a90f55099b399`**, concluded **success** on all six jobs:
+**SSHX-base acceptance, before the owner lifecycle repair:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source **`2c874d858a561d0ab2a2ec15b32a90f55099b399`**, concluded **success** on all six jobs:
 
 | Equipped CI job | Result |
 |---|---|

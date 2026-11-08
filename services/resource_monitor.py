@@ -81,11 +81,12 @@ def instance_metrics(vps):
     base = {'id': vps.id, 'name': vps.name, 'engine': vps.engine,
             'allocation': {'ram_mb': vps.ram_mb, 'vcpus': vps.vcpus, 'disk_gb': vps.disk_gb},
             'suspended': vps.suspended, 'node': vps.node.name if vps.node else 'Local workspace'}
+    from services.lifecycle import control_state
     try:
         result = engine_for(vps.engine, vps.node).metrics(vps.spec())
-        return base | result
     except EngineError as exc:
-        return base | {'status': 'unknown', 'error': str(exc), 'usage': {}}
+        result = {'status': 'unknown', 'error': str(exc), 'usage': {}}
+    return base | result | control_state(vps, result['status'])
 
 
 def totals(instances, metrics):

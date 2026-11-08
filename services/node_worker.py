@@ -9,6 +9,7 @@ from extensions import db
 from models import AgentInstance, AgentOperation
 from services.resource_monitor import host_metrics, require_known_capacity
 from services.security import decrypt, locked, settings
+from services.lifecycle import running_result, stop_before_transition
 
 
 def process_operation(ident):
@@ -59,16 +60,24 @@ def process_operation(ident):
                     result = engine.resize(previous, size)
                     instance.spec = previous | {'disk_gb': size}
                 else:
-                    if kind in ('start', 'restart'):
+                    already_running = running_result(engine, previous) if kind == 'start' else None
+                    if kind in ('start', 'restart') and already_running is None:
                         enforce_capacity(previous, exclude=instance.id, require_available_ram=kind != 'restart')
-                    mutated = True
-                    if kind == 'restart':
-                        engine.stop(previous)
+                    mutated = already_running is None
+                    if already_running is not None:
+                        result = already_running
+                    elif kind == 'restart':
+                        stop_before_transition(engine, previous)
                         enforce_capacity(previous, exclude=instance.id)
                         result = engine.start(previous)
+                    elif kind == 'delete':
+                        stop_before_transition(engine, previous)
+                        result = engine.delete(previous)
                     else:
                         result = getattr(engine, kind)(previous)
                     if kind == 'delete':
+                        if not isinstance(result, dict) or result.get('status') != 'deleted':
+                            raise UncertainError('The engine did not prove deletion. Agent metadata is retained for inspection.')
                         db.session.delete(instance)
                     elif result.get('runtime'):
                         instance.spec = previous | {'runtime': result['runtime']}

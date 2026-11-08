@@ -130,6 +130,8 @@ Other operation kinds: `start`, `stop`, `force_stop`, `restart`, `delete`, `resi
 
 The panel validates instance/operation IDs, integer allocations, finite capacity values, inventory/port shapes and allowed operation states. It strips panel-owned identity/owner/name/node fields from node metric data rather than trusting remote overrides. Authenticated responses are capped at 1 MiB; transfer/read deadlines and redirect rejection apply. Invalid JSON, mismatched completed results, transport failures and HTTP 5xx leave an operation **uncertain**, not falsely failed/successful. Stored bearer tokens are redacted from returned node errors.
 
+Update/restart **both panel and agent** for owner lifecycle fixes. A Delete request remains **one operation ID**: the agent worker proves graceful shutdown before removing the guest/network and its metadata; it never silently Force stops. A failed/unproven stop blocks both restart and deletion, and an unproven deletion retains the agent record for reconciliation. A Start on a freshly verified running guest completes as a no-op without another RAM allocation. Missing/unreachable resources are not conflated: only an actual owned-container NotFound permits orphan-network cleanup.
+
 Operation IDs are idempotent and bound to a digest of the validated request. The same ID with different input returns 409. The transport first checks an existing operation before submitting; polling never reissues a destructive action. Completed/failed payloads are cleared; uncertain payloads remain encrypted for investigation. Node restarts do **not** auto-replay interrupted provisioning.
 
 ## Failure, backup, and recovery boundaries

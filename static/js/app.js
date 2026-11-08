@@ -6,11 +6,26 @@
   const icons = () => window.lucide?.createIcons({attrs: {'stroke-width': 1.65}});
   icons();
   const token = $('meta[name="csrf-token"]')?.content;
+  // Browser Back must not restore stale VM state or a permanently locked submit
+  // button from bfcache after an operation changed/deleted the instance.
+  window.addEventListener('pageshow', event => {
+    if (event.persisted && ($('[data-instance-action]') || $('[data-job-id]'))) location.reload();
+  });
   const updateStatus = data => {
     $$('[data-instance-status]').filter(el=>el.dataset.instanceStatus===data.id).forEach(el=>{
       const state=String(data.status||'unknown');el.className='status status-'+state.replace(/[^a-z_-]/gi,'');
       const dot=document.createElement('span');dot.className='status-dot';
       el.replaceChildren(dot,document.createTextNode(state.replaceAll('_',' ').replace(/^./,x=>x.toUpperCase())));
+    });
+    // Hints come from the same server policy as the initial HTML. Authorization
+    // and verified state transitions still happen independently in the worker.
+    $$('form[data-instance-action]').filter(form=>form.dataset.instanceId===data.id).forEach(form=>{
+      const control=data.controls?.[form.dataset.instanceAction], button=$('button[type="submit"]',form);
+      if (!control || !button || form.dataset.submitting==='yes') return;
+      button.disabled=!control.enabled; button.title=control.reason||'';
+    });
+    $$('[data-lifecycle-notice]').filter(el=>el.dataset.lifecycleNotice===data.id).forEach(el=>{
+      el.textContent=data.control_notice||'';el.hidden=!data.control_notice;
     });
   };
 
@@ -55,10 +70,17 @@
   $('#cancel-confirm')?.addEventListener('click', () => { dialog.close(); pendingForm = null; });
   $('#accept-confirm')?.addEventListener('click', () => {
     dialog.close(); if (!pendingForm) return;
-    pendingForm.dataset.confirmed = 'yes'; pendingForm.requestSubmit(pendingSubmitter || undefined); pendingForm = null;
+    if (pendingSubmitter?.disabled) {
+      toast('This action is no longer available. Refresh the instance state and try again.', 'error');
+      pendingForm = null; pendingSubmitter = null; return;
+    }
+    pendingForm.dataset.confirmed = 'yes'; pendingForm.requestSubmit(pendingSubmitter || undefined);
+    pendingForm = null; pendingSubmitter = null;
   });
   $$('form:not(#console-input-form)').forEach(form => form.addEventListener('submit', event => {
     if (event.defaultPrevented || form.method.toLowerCase() !== 'post') return;
+    if (form.dataset.submitting === 'yes') { event.preventDefault(); return; }
+    form.dataset.submitting = 'yes';
     const button = event.submitter || $('button[type="submit"], button:not([type])', form);
     if (button) { button.disabled = true; button.textContent = 'Working…'; }
   }));
