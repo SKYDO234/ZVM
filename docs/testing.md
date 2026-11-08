@@ -2,11 +2,28 @@
 
 ## Blocking-operation recovery and dedicated admin pages
 
-- Local Python: **439 passed, 4 native skips, 1 warning in 142.47 s** (including default-password access to all nine dedicated admin pages). Compile, Ruff `F`, JavaScript syntax, diff checks and the locked asset build passed. No unrelated vendor/font/manifest changes.
-- Browser: **20 passed in 1.9 minutes**. Desktop/Pixel 7 navigation exercises all dedicated admin pages, default-password reminder, connected account/plan/image/settings forms, owner blocker visibility, administrator-only recovery, confirmation cancellation and live owner-control re-enablement. Browser engine/process/SSH boundaries remain explicitly synthetic and execute no shell/installer; this is not native VM proof.
-- Native acceptance now deliberately seeds **interrupted request metadata** while a real guest is running, checks administrator-only non-replaying state inspection locally and over verified TLS, then continues actual regular-owner lifecycle/persistence/deletion. This is not an actual worker-crash test. **Final equipped acceptance for the installer-check follow-up is pending. The initial [run 42462316220](https://github.com/SKYDO234/ZVM/actions/runs/42462316220), exact application/test source `af9af483c32b42dd55e570e9839b6a293445ffbd`, passed Docker/TLS-agent, both Python versions and browser, but its installer smoke check still expected the pre-split `/admin` plan redirect/catalog. That check now requires `/admin/plans` and all 17 authenticated routes; the earlier run is not a green full acceptance. Neither is the older owner-lifecycle run below proof of these changes.**
-- Actual restarted Gunicorn preview on port 31120 passed existing-account login, **17 authenticated routes**, metrics, the non-blocking reminder and 412 px mobile with no overflow/JavaScript errors or fake VPS. The corrected standalone installer HTTP check also passed against a separate disposable DB, including duplicate-start protection, password replacement, session revocation and restart persistence; the existing preview account hashes and VPS count were unchanged. The root installer/native QEMU stages still require the equipped job.
-- See [safe recovery and all page URLs](operations.md). No arbitrary job reset, automatic Force stop, database cleanup script or fake operation success is supplied.
+- Final local Python: **439 passed, 4 native skips, 1 warning in 142.47 s**, including default-password access to all nine dedicated admin pages. Compile, Ruff `F`, JavaScript syntax, diff checks and the locked asset build passed. No unrelated vendor/font/manifest changes.
+- Browser: **20 passed in 1.9 minutes**. Desktop/Pixel 7 navigation exercises all dedicated admin pages, the default-password reminder, connected account/plan/image/settings forms, owner blocker visibility, administrator-only recovery, confirmation cancellation and live owner-control re-enablement. Browser engine/process/SSH boundaries remain explicitly synthetic and execute no shell/installer; this is not native VM proof.
+- **All six equipped jobs passed** in [run 42462999834](https://github.com/SKYDO234/ZVM/actions/runs/42462999834), exact application/test source **`3c0681e09586913ba268827ddaf6c54d3d2d91e2`**. Documentation-only follow-ups do not change that tested source.
+
+| Equipped job | Fresh result |
+|---|---|
+| Backend Python 3.11 | **439 passed**, 443 cases, 0 failures/errors, 4 native skips |
+| Backend Python 3.12 | **439 passed**, 443 cases, 0 failures/errors, 4 native skips |
+| Browser | Passed desktop/Pixel 7 suite; the identical local suite contains 20 cases |
+| Installer / userspace QEMU | Passed actual root installer, fresh verified Node LTS, real Gunicorn HTTP checks for 17 authenticated routes, connected plan creation, password/session/restart persistence and native blank-QEMU smoke/integration |
+| Full OS / SSHX | **1 real Ubuntu/TCG case, 0 failures/errors, 0 skipped**; real running-guest recovery, regular-owner lifecycle/persistence and actual guest-only SSHX |
+| Docker / TLS agent | **2 native cases, 0 failures/errors, 0 skipped**; local and verified-TLS agent recovery/lifecycle |
+
+All **nine retained catalog endpoints** passed HTTPS/QCOW2 verification in that same run. The full-OS case proves the named Ubuntu path, not nine successful OS boots or KVM compatibility. Checks API annotations record the one-case `qemu-panel.xml`, two-case `docker-panel.xml`, nine verified OS endpoints and both 443-case `backend.xml` reports.
+
+Native recovery deliberately seeds **interrupted request metadata** while a real guest is running, checks administrator-only non-replaying state inspection locally and over verified TLS, verifies the original request becomes failed/unconfirmed with its guest/allocation retained, then continues actual regular-owner lifecycle/persistence/deletion. This is **not an actual worker-crash test or proof the seeded old Stop ran**. Concurrency, live-worker refusal and authorization changes have separate boundary-controlled regression coverage.
+
+The actual restarted Gunicorn preview on port 31120 passed existing-account login, **17 authenticated routes**, metrics, the non-blocking reminder and 412 px mobile with no overflow/JavaScript errors or fake VPS. The corrected standalone installer HTTP check also passed against a separate disposable DB, including duplicate-start protection, password replacement, session revocation and restart persistence; the existing preview account hashes and VPS count were unchanged. The root installer is never run against the live development database.
+
+The initial [run 42462316220](https://github.com/SKYDO234/ZVM/actions/runs/42462316220), source `af9af483c32b42dd55e570e9839b6a293445ffbd`, passed Docker/TLS-agent, both Python versions and browser but failed an outdated installer-smoke assertion expecting the pre-split `/admin` plan redirect/catalog. That check was updated to `/admin/plans` and all 17 routes; the initial run was cancelled when the follow-up started. It is not substituted for the fresh all-green result above.
+
+See [safe recovery and all page URLs](operations.md). No arbitrary job reset, automatic Force stop, database cleanup script or fake operation success is supplied.
 
 ## Earlier owner lifecycle repair
 
@@ -74,7 +91,7 @@ CI uses its installed Playwright Chromium. Where an equipped local Chromium is a
 
 ### Real Ubuntu / QEMU / SSHX
 
-**Current equipped owner-lifecycle acceptance:** [run 42458792864](https://github.com/SKYDO234/ZVM/actions/runs/42458792864), application/test source `4efdf0e3cb797a1110f5f6900a33239af1cdf7cb`, completed all six jobs successfully. The full-OS check reported **1 case, 0 failures/errors, 0 skipped**. It proves admin assignment to a regular owner, real owner power/restart/persistence and graceful running-guest deletion alongside actual guest SSHX installation, live-link preservation on repeated Start, captured-link display, stop proof and reinstall/orphan recovery. All nine OS catalog endpoints were HTTPS/QCOW2-verified. The earlier [SSHX-base run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688) tested `2c874d8` before this repair; it is not substituted for this fresh result.
+**Current equipped acceptance:** [run 42462999834](https://github.com/SKYDO234/ZVM/actions/runs/42462999834), application/test source `3c0681e09586913ba268827ddaf6c54d3d2d91e2`, completed all six jobs successfully. The full-OS check reported **1 case, 0 failures/errors, 0 skipped**. It proves read-only closure of deliberately interrupted power-request metadata against the real running guest, admin assignment to a regular owner, real owner power/restart/persistence and graceful running-guest deletion alongside actual guest SSHX installation, live-link preservation on repeated Start, captured-link display, stop proof and reinstall/orphan recovery. All nine OS catalog endpoints were HTTPS/QCOW2-verified. Earlier owner/SSHX runs remain recorded as history, not substituted for this result.
 
 To reproduce, install native QEMU/cloud-init/OpenSSH tools on a disposable Linux host; do not require KVM or a privileged guest container. Obtain the image checksum using the distribution-provided Ubuntu cloud-image GPG keyring:
 
@@ -104,7 +121,7 @@ Use an already accessible **local Unix** daemon with working memory/CPU controls
 SKVM_RUN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest tests/test_docker_integration.py -q -rs
 ```
 
-**Current owner acceptance:** [run 42458792864](https://github.com/SKYDO234/ZVM/actions/runs/42458792864), source `4efdf0e`, native `docker-panel` check: **2 cases, 0 failures/errors, 0 skipped**. Admin provisioning assigns to a separate regular owner; that owner checks job-page/API access, start/stop/restart and deletion of running containers.
+**Current equipped acceptance:** [run 42462999834](https://github.com/SKYDO234/ZVM/actions/runs/42462999834), source `3c0681e09586913ba268827ddaf6c54d3d2d91e2`, native `docker-panel` check: **2 cases, 0 failures/errors, 0 skipped**. Admin provisioning assigns to a separate regular owner; that owner checks job-page/API access, start/stop/restart and deletion of running containers. Both local and verified-TLS agent cases also seed interrupted request context, deny owner recovery, inspect the actual running container through the administrator route, close the old request as failed/unconfirmed and retain its real allocation before continuing lifecycle.
 
 Tests check real queued panel creation, 128 MiB / 1 CPU / 128 PID limits, UID 1000, no privileges/host mounts/public ports, owned internal network, actual telemetry and persistent data through lifecycle/deletion. The local case also verifies force-stop. The second case goes through a real TLS/bearer agent and both queue consumers. Direct test-only SDK diagnostics are not a public Console API.
 
