@@ -10,10 +10,24 @@ from models import AgentInstance, AgentOperation
 from services.resource_monitor import host_metrics, require_known_capacity
 from services.security import decrypt, locked, settings
 from services.lifecycle import running_result, stop_before_transition
+from services.job_control import SIMPLE_POWER, execution_lock
 
 
 def process_operation(ident):
+    try:
+        with execution_lock(ident, agent=True):
+            return _process_operation(ident)
+    except BlockingIOError:
+        return False
+
+
+def _process_operation(ident):
     operation = db.session.get(AgentOperation, ident)
+    if not operation:
+        return
+    db.session.refresh(operation)
+    if operation.status != 'queued':
+        return
     mutated = False
     try:
         payload = decrypt(operation.payload)
@@ -103,8 +117,10 @@ def reconcile_operation(ident):
     if current_app.config['TEST_MODE']:
         raise EngineError('Agent test mode: reconciliation mutations are disabled.')
     try:
-        with locked('agent-capacity', blocking=False):
+        with execution_lock(ident, agent=True), locked('agent-capacity', blocking=False):
             operation = db.session.get(AgentOperation, ident)
+            if operation:
+                db.session.refresh(operation)
             if not operation or operation.status != 'uncertain' or not operation.payload:
                 raise EngineError('Only an uncertain operation with preserved context can be reconciled.')
             payload = decrypt(operation.payload)
@@ -144,6 +160,38 @@ def reconcile_operation(ident):
                 return operation
     except BlockingIOError as exc:
         raise EngineError('The agent is busy with another operation. Wait until it finishes, then reconcile again.') from exc
+
+
+def close_power_operation(ident):
+    """Close only interrupted basic power work; never replay an agent mutation."""
+    from services.recovery import inspect_power_state
+    if current_app.config['TEST_MODE']:
+        raise EngineError('Agent test mode: recovery mutations are disabled.')
+    try:
+        with execution_lock(ident, agent=True), locked('agent-capacity', blocking=False):
+            operation = db.session.get(AgentOperation, ident)
+            if not operation:
+                raise EngineError('The original agent operation is missing; manual inspection is required.')
+            db.session.refresh(operation)
+            if operation.status != 'uncertain' or not operation.payload:
+                raise EngineError('Only an uncertain operation with preserved context can be closed.')
+            payload = decrypt(operation.payload)
+            if not isinstance(payload, dict) or payload.get('kind') not in SIMPLE_POWER or not isinstance(payload.get('spec'), dict):
+                raise EngineError('Only interrupted basic power requests can be closed; storage/provisioning and SSHX contexts are retained.')
+            requested = payload['spec']
+            with locked(f'control-{requested["id"]}', blocking=False):
+                instance = db.session.get(AgentInstance, requested['id'])
+                if not instance or any(type(instance.spec.get(k)) is not type(requested.get(k)) or instance.spec.get(k) != requested.get(k)
+                                       for k in ('id', 'owner_id', 'engine', 'ram_mb', 'vcpus', 'disk_gb')):
+                    raise EngineError('The original managed instance identity/allocation cannot be proven.')
+                state = inspect_power_state(instance.spec, engine_for(instance.spec['engine']))
+                operation.status, operation.result, operation.payload = 'failed', None, None
+                operation.error = (f'Interrupted power request closed after verified {state} state. '
+                                   'The original outcome is not claimed; no action was replayed and the instance allocation remains.')
+                db.session.commit()
+                return operation
+    except BlockingIOError as exc:
+        raise EngineError('The agent still owns live work. No operation lock was cleared.') from exc
 
 
 def enforce_capacity(spec, exclude=None, require_available_ram=True):
@@ -202,7 +250,8 @@ def agent_loop(app, stop_event=None):
                     try:
                         ident = db.session.scalar(db.select(AgentOperation.id).where(AgentOperation.status == 'queued').order_by(AgentOperation.created_at).limit(1))
                         if ident:
-                            process_operation(ident)
+                            if process_operation(ident) is False:
+                                stop_event.wait(.25)
                         else:
                             stop_event.wait(1)
                     except Exception:

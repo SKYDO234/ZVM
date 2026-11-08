@@ -1,0 +1,6 @@
+
+<p class="muted">Stopped QEMU VMs only. The new owner’s quota is reserved and checked again in the worker. The guest disk is preserved; native SSH passwords/keys are <strong>not rotated</strong>. Review them before transferring a guest between people. Stopping the VM ends its old SSHX client.</p>
+<form method="post" action="{{ url_for('vps.action',ident=vps.id,action='assign') }}" class="form-stack" data-confirm="Transfer this stopped VM and its existing disk data to the selected account? Confirm that you reviewed the existing guest credentials; reassignment does not rotate them.">{{ csrf() }}
+<label class="field">New owner<select name="owner_id" required>{% for u in owners if u.id!=vps.owner_id %}<option value="{{ u.id }}">{{ u.name }} · {{ u.email }}</option>{% endfor %}</select></label>
+<label class="check-field"><input type="checkbox" name="guest_credentials_reviewed" value="1" required><span>I reviewed guest data and native SSH credentials for this transfer. I understand old credentials are not reset automatically.</span></label>
+<button class="btn btn-secondary btn-sm">{{ icon('user-round-check') }}Assign VM</button></form>

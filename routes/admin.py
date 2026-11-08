@@ -6,22 +6,147 @@ from extensions import db
 from models import Audit, Job, Node, OSImage, Plan, ProvisionTicket, Setting, User, VPS
 from services.image_manager import ImageManager
 from services.provisioning import reconcile_job
+from services.job_control import cancel_queued, close_power, options as job_options
+from services.resource_monitor import instance_metrics
 from services.security import admin_required, audit, encrypt, integer, settings, validate_url, locked
 
 bp = Blueprint('admin', __name__, url_prefix='/admin')
+
+
+ADMIN_PAGES = (
+    ('index', 'Admin control', 'shield-check', 'Overview and shortcuts to each operator tool.'),
+    ('users', 'Users', 'users', 'Accounts, roles, access and assigned quota plans.'),
+    ('instances', 'Instances', 'server', 'Real VPS allocations and per-instance administrative pages.'),
+    ('plans', 'Plans', 'layers-3', 'Resource budgets across engines and nodes.'),
+    ('nodes', 'External nodes', 'network', 'Verified HTTPS agents and encrypted node credentials.'),
+    ('images', 'OS images', 'disc-3', 'The retained OS catalog, checksums and live endpoint checks.'),
+    ('configuration', 'Configuration', 'sliders-horizontal', 'Platform policies and conservative engine limits.'),
+    ('jobs', 'Jobs', 'workflow', 'Queued, running and completed operation history.'),
+    ('recovery', 'Recovery', 'scan-search', 'Inspect blocked work without replaying it or clearing live locks.'),
+    ('audit', 'Audit log', 'scroll-text', 'Security history without credentials or capability URLs.'),
+)
+
+
+@bp.app_context_processor
+def navigation():
+    return {'admin_pages': ADMIN_PAGES}
 
 
 @bp.get('')
 @login_required
 @admin_required
 def index():
-    return render_template('admin_dashboard.html', users=list(db.session.scalars(db.select(User).order_by(User.id))),
-                           instances=list(db.session.scalars(db.select(VPS).order_by(VPS.created_at.desc()))),
-                           plans=list(db.session.scalars(db.select(Plan))), images=list(db.session.scalars(db.select(OSImage))),
-                           nodes=list(db.session.scalars(db.select(Node))), settings=settings(),
-                           jobs=list(db.session.scalars(db.select(Job).order_by(Job.created_at.desc()).limit(50))),
-                           activity=list(db.session.scalars(db.select(Audit).order_by(Audit.id.desc()).limit(50))),
+    counts = {name: db.session.scalar(db.select(db.func.count()).select_from(model))
+              for name, model in (('users', User), ('instances', VPS), ('plans', Plan), ('nodes', Node))}
+    counts['recovery'] = db.session.scalar(db.select(db.func.count()).select_from(Job).where(Job.status == 'uncertain'))
+    counts['pending'] = db.session.scalar(db.select(db.func.count()).select_from(Job).where(Job.status.in_(['queued', 'running'])))
+    return render_template('admin_dashboard.html', admin_page='index', counts=counts)
+
+
+@bp.get('/users')
+@login_required
+@admin_required
+def users():
+    return render_template('admin/users.html', admin_page='users',
+                           users=list(db.session.scalars(db.select(User).order_by(User.id))),
+                           plans=list(db.session.scalars(db.select(Plan).order_by(Plan.name))))
+
+
+@bp.get('/instances')
+@login_required
+@admin_required
+def instances():
+    return render_template('admin/instances.html', admin_page='instances',
+                           instances=list(db.session.scalars(db.select(VPS).order_by(VPS.created_at.desc()))))
+
+
+@bp.get('/plans')
+@login_required
+@admin_required
+def plans():
+    return render_template('admin/plans.html', admin_page='plans', plans=list(db.session.scalars(db.select(Plan).order_by(Plan.name))))
+
+
+@bp.get('/nodes')
+@login_required
+@admin_required
+def nodes():
+    return render_template('admin/nodes.html', admin_page='nodes', nodes=list(db.session.scalars(db.select(Node).order_by(Node.name))))
+
+
+@bp.get('/images')
+@login_required
+@admin_required
+def images():
+    return render_template('admin/images.html', admin_page='images', images=list(db.session.scalars(db.select(OSImage).order_by(OSImage.name))))
+
+
+@bp.get('/configuration')
+@login_required
+@admin_required
+def configuration():
+    return render_template('admin/configuration.html', admin_page='configuration', settings=settings(),
                            capabilities={'qemu': engine_for('qemu').capabilities(), 'docker': engine_for('docker').capabilities()})
+
+
+def _job_page(recovery=False):
+    query = db.select(Job)
+    state = request.args.get('status', 'active' if recovery else 'all')
+    if state not in ('all', 'active', 'queued', 'running', 'uncertain', 'completed', 'failed', 'cancelled'):
+        abort(400)
+    if recovery:
+        query = query.where(Job.status.in_(['queued', 'running', 'uncertain']))
+    if state == 'active':
+        query = query.where(Job.status.in_(['queued', 'running', 'uncertain']))
+    elif state != 'all':
+        query = query.where(Job.status == state)
+    ident = request.args.get('instance', '').strip()
+    if ident:
+        from services.security import valid_uuid
+        try:
+            valid_uuid(ident)
+        except EngineError:
+            abort(400)
+        query = query.where(Job.instance_id == ident)
+    pagination = db.paginate(query.order_by(Job.created_at.desc()), per_page=25, max_per_page=25, error_out=False)
+    return render_template('admin/recovery.html' if recovery else 'admin/jobs.html',
+                           admin_page='recovery' if recovery else 'jobs', pagination=pagination,
+                           jobs=pagination.items, state=state, instance_filter=ident,
+                           job_options={job.id: job_options(job, current_user) for job in pagination.items})
+
+
+@bp.get('/jobs')
+@login_required
+@admin_required
+def jobs():
+    return _job_page()
+
+
+@bp.get('/recovery')
+@login_required
+@admin_required
+def recovery():
+    return _job_page(recovery=True)
+
+
+@bp.get('/audit', endpoint='audit')
+@login_required
+@admin_required
+def audit_log():
+    pagination = db.paginate(db.select(Audit).order_by(Audit.id.desc()), per_page=50, max_per_page=50, error_out=False)
+    return render_template('admin/audit.html', admin_page='audit', activity=pagination.items, pagination=pagination)
+
+
+@bp.get('/instances/<ident>/<section>')
+@login_required
+@admin_required
+def instance_control(ident, section):
+    if section not in ('network', 'ownership', 'suspension'):
+        abort(404)
+    instance = db.get_or_404(VPS, ident)
+    return render_template('admin/instance_control.html', admin_page='instances', section=section, vps=instance,
+                           metric=instance_metrics(instance),
+                           owners=list(db.session.scalars(db.select(User).where(User.enabled.is_(True)).order_by(User.name))))
 
 
 @bp.post('/settings')
@@ -47,7 +172,7 @@ def update_settings():
     except EngineError as exc:
         db.session.rollback()
         flash(str(exc), 'error')
-    return redirect(url_for('admin.index') + '#configuration')
+    return redirect(url_for('admin.configuration'))
 
 
 @bp.post('/users/<int:ident>')
@@ -73,11 +198,11 @@ def update_user(ident):
         if user.id == current_user.id:
             from flask_login import login_user
             login_user(user)
-        flash('User updated. Disabling sign-in does not silently kill their guests; suspend those explicitly below.', 'success')
+        flash('User updated. Disabling sign-in does not silently kill their guests; use the instance’s Suspension page explicitly.', 'success')
     except EngineError as exc:
         db.session.rollback()
         flash(str(exc), 'error')
-    return redirect(url_for('admin.index') + '#users')
+    return redirect(url_for('admin.users'))
 
 
 @bp.post('/users/<int:ident>/delete')
@@ -112,7 +237,7 @@ def delete_user(ident):
     except EngineError as exc:
         db.session.rollback()
         flash(str(exc), 'error')
-    return redirect(url_for('admin.index') + '#users')
+    return redirect(url_for('admin.users'))
 
 
 @bp.post('/plans')
@@ -140,7 +265,7 @@ def save_plan():
     except EngineError as exc:
         db.session.rollback()
         flash(str(exc), 'error')
-    return redirect(url_for('admin.index') + '#plans')
+    return redirect(url_for('admin.plans'))
 
 
 @bp.post('/images/<ident>')
@@ -169,7 +294,7 @@ def update_image(ident):
             flash('Image configuration saved. Docker references remain restricted to the built-in OS catalog.', 'success')
     except EngineError as exc:
         flash(str(exc), 'error')
-    return redirect(url_for('admin.index') + '#images')
+    return redirect(url_for('admin.images'))
 
 
 @bp.post('/nodes')
@@ -199,7 +324,7 @@ def add_node():
     except EngineError as exc:
         db.session.rollback()
         flash(str(exc), 'error')
-    return redirect(url_for('admin.index') + '#nodes')
+    return redirect(url_for('admin.nodes'))
 
 
 @bp.post('/nodes/<int:ident>/<action>')
@@ -232,7 +357,7 @@ def node_action(ident, action):
             abort(404)
     except EngineError as exc:
         flash(str(exc), 'error')
-    return redirect(url_for('admin.index') + '#nodes')
+    return redirect(url_for('admin.nodes'))
 
 
 @bp.post('/jobs/<ident>/reconcile')
@@ -246,5 +371,34 @@ def reconcile(ident):
         db.session.commit()
         flash('Job reconciled.', 'success')
     except EngineError as exc:
+        db.session.rollback()
+        flash(str(exc), 'error')
+    return redirect(url_for('vps.job', ident=job.id))
+
+
+@bp.post('/jobs/<ident>/cancel')
+@login_required
+@admin_required
+def cancel_job(ident):
+    job = db.get_or_404(Job, ident)
+    try:
+        cancel_queued(job, current_user)
+        flash('Queued request cancelled before any engine action.', 'success')
+    except EngineError as exc:
+        db.session.rollback()
+        flash(str(exc), 'error')
+    return redirect(url_for('vps.job', ident=job.id))
+
+
+@bp.post('/jobs/<ident>/close-power')
+@login_required
+@admin_required
+def close_power_job(ident):
+    job = db.get_or_404(Job, ident)
+    try:
+        close_power(job, current_user)
+        flash('Interrupted power request closed without replaying it. Its original outcome is not reported as success.', 'success')
+    except EngineError as exc:
+        db.session.rollback()
         flash(str(exc), 'error')
     return redirect(url_for('vps.job', ident=job.id))

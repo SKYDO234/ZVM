@@ -24,6 +24,24 @@
       if (!control || !button || form.dataset.submitting==='yes') return;
       button.disabled=!control.enabled; button.title=control.reason||'';
     });
+    $$('[data-operation-blockers]').filter(el=>el.dataset.operationBlockers===data.id).forEach(panel=>{
+      const rows=Array.isArray(data.blocking_jobs)?data.blocking_jobs:[];
+      panel.hidden=rows.length===0;
+      const signature=JSON.stringify(rows);
+      if(panel.dataset.signature===signature)return;
+      panel.dataset.signature=signature;
+      const root=$('[data-operation-items]',panel);root.replaceChildren();
+      for(const row of rows){
+        const item=document.createElement('div');item.className='operation-item';
+        const label=document.createElement('span');
+        label.textContent=String(row.kind).replaceAll('_',' ')+' · #'+String(row.id).slice(0,8)+' · '+String(row.status);
+        item.append(label);
+        if(typeof row.url==='string'&&row.url.startsWith('/')&&!row.url.startsWith('//')){
+          const link=document.createElement('a');link.className='text-link';link.href=row.url;link.textContent='Open job';item.append(link);
+        }else{const hint=document.createElement('span');hint.className='muted';hint.textContent='Administrator review required.';item.append(hint);}
+        root.append(item);
+      }
+    });
     $$('[data-lifecycle-notice]').filter(el=>el.dataset.lifecycleNotice===data.id).forEach(el=>{
       el.textContent=data.control_notice||'';el.hidden=!data.control_notice;
     });
@@ -167,7 +185,9 @@
     if($('#filter-empty'))$('#filter-empty').hidden=count>0;
   }));
   const job = $('[data-job-id]');
-  if(job){let timer;const poll=async()=>{try{const data=await api('/api/jobs/'+job.dataset.jobId);$('#job-state').className='status status-'+data.status;$('#job-state').textContent=data.status[0].toUpperCase()+data.status.slice(1);$('#job-message').textContent=data.message;$('#job-instance-link').hidden=!data.exists;if(!['queued','running'].includes(data.status)){clearInterval(timer);$('#job-symbol').classList.remove('spin');}}catch(error){clearInterval(timer);toast(error.message,'error');}};timer=setInterval(poll,2000);poll();}
+  if(job){let timer;const poll=async()=>{try{const data=await api('/api/jobs/'+job.dataset.jobId);$('#job-state').className='status status-'+data.status;$('#job-state').textContent=data.status[0].toUpperCase()+data.status.slice(1);$('#job-message').textContent=data.message;$('#job-instance-link').hidden=!data.exists;
+      if($('#job-uncertain-help'))$('#job-uncertain-help').hidden=data.status!=='uncertain';
+      $$('[data-job-recovery]',job).forEach(form=>{const available=data[form.dataset.jobRecovery]===true;form.hidden=!available;const button=$('button',form);if(button&&form.dataset.submitting!=='yes')button.disabled=!available;});if(!['queued','running'].includes(data.status)){clearInterval(timer);$('#job-symbol').classList.remove('spin');}}catch(error){clearInterval(timer);toast(error.message,'error');}};timer=setInterval(poll,2000);poll();}
   const drawer=$('#activity-drawer');
   $('#notifications-toggle')?.addEventListener('click',async()=>{drawer.hidden=!drawer.hidden;if(drawer.hidden)return;try{const rows=await api('/api/activity');const root=$('#activity-items');root.replaceChildren();if(!rows.length)root.textContent='No activity recorded yet.';for(const row of rows){const el=document.createElement('div');el.className='drawer-item';const text=document.createElement('span');text.textContent=row.message;const date=document.createElement('small');date.textContent=new Date(row.at).toLocaleString();el.append(text,date);root.append(el);}}catch(error){$('#activity-items').textContent=error.message;}});
   $('#close-activity')?.addEventListener('click',()=>drawer.hidden=true);

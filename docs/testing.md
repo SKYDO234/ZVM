@@ -1,6 +1,13 @@
 # Validation and compatibility boundaries
 
-## Owner lifecycle repair
+## Blocking-operation recovery and dedicated admin pages
+
+- Local Python: **430 passed, 4 native skips, 1 warning in 141.50 s**. Compile, Ruff `F`, JavaScript syntax, diff checks and the locked asset build passed. No unrelated vendor/font/manifest changes.
+- Browser: **20 passed in 1.9 minutes**. Desktop/Pixel 7 navigation exercises all dedicated admin pages, default-password reminder, connected account/plan/image/settings forms, owner blocker visibility, administrator-only recovery, confirmation cancellation and live owner-control re-enablement. Browser engine/process/SSH boundaries remain explicitly synthetic and execute no shell/installer; this is not native VM proof.
+- Native acceptance now deliberately seeds **interrupted request metadata** while a real guest is running, checks administrator-only non-replaying state inspection locally and over verified TLS, then continues actual regular-owner lifecycle/persistence/deletion. This is not an actual worker-crash test. **The fresh equipped result for this revision is pending; the older green owner-lifecycle run below does not prove these new changes.**
+- See [safe recovery and all page URLs](operations.md). No arbitrary job reset, automatic Force stop, database cleanup script or fake operation success is supplied.
+
+## Earlier owner lifecycle repair
 
 The current repair keeps ordinary owners' backend permissions and makes their controls usable: observed-state Start/Stop/Restart, visible confirmed Delete on Details/My VPS, one verified graceful-stop-then-delete job, and owner-visible admin-requested power jobs with requester audit attribution. Already-running Start is an engine-verified no-op that does not demand a second allocation or retire a live SSHX link. Neither restart nor deletion proceeds after failed/unproven shutdown; unknown deletion keeps agent metadata and reservations intact.
 

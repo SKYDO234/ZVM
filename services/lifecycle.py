@@ -1,10 +1,35 @@
 """Shared lifecycle safety and presentation policy; never an engine substitute."""
-from engines import UncertainError
+from flask import has_request_context, url_for
+from flask_login import current_user
+from engines import EngineError, UncertainError
 from extensions import db
 from models import Job
 
 ACTIVE_JOBS = ('queued', 'running', 'uncertain')
 POWER_ACTIONS = ('start', 'stop', 'restart', 'force_stop', 'delete')
+
+
+class JobConflict(EngineError):
+    """Expose the real blocker, never silently enqueue a conflicting action."""
+    def __init__(self, job, action):
+        self.job = job
+        self.duplicate = job.kind == action and job.status in ('queued', 'running') and action in POWER_ACTIONS
+        requested = action.replace('_', ' ').title()
+        detail = f'{job.kind.replace("_", " ").title()} job #{job.id[:8]} is {job.status}.'
+        super().__init__((f'{detail} No additional operation was queued.' if self.duplicate else
+                          f'{requested} was not queued: {detail}') +
+                         (' An uncertain job needs inspection in Jobs & recovery; no live lock or storage reservation was cleared.'
+                          if job.status == 'uncertain' else ' Follow the existing job instead of submitting another request.'))
+
+
+def blocking_jobs(jobs):
+    """Only public status/authorized internal links; no encrypted context/keys."""
+    result = []
+    for job in jobs:
+        viewable = has_request_context() and (current_user.is_admin or current_user.id == job.owner_id)
+        result.append({'id': job.id, 'kind': job.kind, 'status': job.status,
+                       'url': url_for('vps.job', ident=job.id) if viewable else None})
+    return result
 
 
 def shutdown_recovery(job, action):
@@ -67,4 +92,4 @@ def control_state(vps, status):
             enabled[kind], reasons[kind], notice = False, reason, reason
     controls = {kind: {'enabled': enabled[kind], 'reason': '' if enabled[kind] else reasons[kind]}
                 for kind in POWER_ACTIONS}
-    return {'controls': controls, 'control_notice': notice}
+    return {'controls': controls, 'control_notice': notice, 'blocking_jobs': blocking_jobs(active)}

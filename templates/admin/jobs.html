@@ -1,0 +1,6 @@
+{% extends 'admin/base.html' %}
+{% block admin_content %}
+{% include 'admin/_job_filters.html' %}
+<section class="card" id="jobs"><div class="card-heading"><h3>Operation history</h3><a class="text-link" href="{{ url_for('admin.recovery') }}">Jobs needing attention {{ icon('arrow-right') }}</a></div><div class="table-scroll"><table><thead><tr><th>JOB / INSTANCE</th><th>STATUS</th><th>MESSAGE</th><th>REQUESTED</th></tr></thead><tbody>{% for j in jobs %}<tr><td><a class="text-link" href="{{ url_for('vps.job',ident=j.id) }}">{{ j.kind|replace('_',' ')|title }} · {{ j.id[:8] }}</a><small><code>{{ j.instance_id }}</code></small></td><td>{{ badge(j.status) }}</td><td class="wrap-cell">{{ j.message }}</td><td class="nowrap">{{ j.created_at|datetime }}</td></tr>{% else %}<tr><td colspan="4" class="table-empty">No operations match this filter.</td></tr>{% endfor %}</tbody></table></div></section>
+{% include 'admin/_pagination.html' %}
+{% endblock %}

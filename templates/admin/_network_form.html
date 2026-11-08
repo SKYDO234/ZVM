@@ -1,0 +1,6 @@
+
+<p class="muted">Stop the VM first. Current policy: <strong>{{ 'restricted' if vps.runtime.get('network_restricted',True) else 'outbound internet allowed' }}</strong>. SSHX requires outbound HTTPS. This setting never changes another VM or the global default.</p>
+<form method="post" action="{{ url_for('vps.action',ident=vps.id,action='network') }}" class="form-stack" data-confirm="Apply this network policy to this stopped VM? Outbound internet mode also permits reachable host/private services through QEMU user networking.">{{ csrf() }}
+<label class="field">Network policy<select name="network_mode"><option value="restricted" {{ 'selected' if vps.runtime.get('network_restricted',True) }}>Restricted · no outbound internet</option><option value="internet" {{ 'selected' if not vps.runtime.get('network_restricted',True) }}>Outbound internet · supports SSHX</option></select></label>
+<label class="check-field"><input type="checkbox" name="accept_network_risk" value="1"><span>For internet mode: I trust this guest to reach host/private services. I will use a dedicated isolated node for untrusted guests.</span></label>
+<button class="btn btn-secondary btn-sm">{{ icon('network') }}Apply network policy</button></form>

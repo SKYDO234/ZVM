@@ -32,6 +32,7 @@ def test_real_docker_lifecycle_limits_and_writable_layer(app):
         assert inspect_outcome('create',spec,{'spec':spec},engine)['status']=='stopped'
         panel.action('start')
         assert panel.metrics()['status']=='running'
+        panel.interrupted_power_recovery()
         with engine._client() as client:
             container=engine._container(client,spec)
             identity=container.exec_run(['id'],user='1000:1000',privileged=False)
@@ -139,6 +140,7 @@ def test_real_external_node_tls_panel_queue_and_docker_guest(app,tmp_path,monkey
             assert db.session.get(AgentInstance,panel.ident) is not None
             assert db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status=='completed'))==1
         panel.action('start');assert panel.metrics()['status']=='running'
+        interrupted_id=panel.interrupted_power_recovery(agent=agent)
         with DockerEngine()._client() as native_client:
             result=DockerEngine()._container(native_client,data).exec_run(['id'],user='1000:1000',privileged=False)
             assert result.exit_code==0 and b'uid=1000' in result.output
@@ -149,7 +151,7 @@ def test_real_external_node_tls_panel_queue_and_docker_guest(app,tmp_path,monkey
         assert db.session.get(VPS,panel.ident) is None and node_engine.capabilities()['instances']==[]
         with agent.app_context():
             assert db.session.get(AgentInstance,panel.ident) is None
-            assert db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status!='completed'))==0
+            assert db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status!='completed',AgentOperation.id!=interrupted_id))==0
     finally:
         panel.close()
         assert stop_background(agent),'Do not tear down an agent while its real resource mutation is active.'

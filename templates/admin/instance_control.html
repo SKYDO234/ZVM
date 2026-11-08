@@ -1,0 +1,20 @@
+{% extends 'admin/base.html' %}
+{% set titles={'network':'Guest network policy','ownership':'Instance ownership','suspension':'Administrative suspension'} %}
+{% block admin_heading %}{{ titles[section] }}{% endblock %}
+{% block admin_content %}
+<div data-instance-control="{{ section }}">
+<a class="back-link" href="{{ url_for('vps.details',ident=vps.id) }}">{{ icon('arrow-left') }}{{ vps.name }} · VPS Details</a>
+<nav class="admin-tabs" aria-label="Instance admin controls">{% for key,label in [('network','Network'),('ownership','Ownership'),('suspension','Suspension')] %}<a href="{{ url_for('admin.instance_control',ident=vps.id,section=key) }}" class="{{ 'active' if section==key }}">{{ label }}</a>{% endfor %}<a href="{{ url_for('admin.recovery',instance=vps.id) }}">Jobs & recovery</a></nav>
+{% include '_operation_blockers.html' %}
+<section class="card form-card"><div class="form-section-heading"><span class="section-number">{{ icon('shield-check') }}</span><div><h3>{{ vps.name }}</h3><p>{{ vps.owner.email }} · {{ vps.engine|upper }} · {{ metric.status|title }}</p></div></div>
+{% if section in ('network','ownership') and vps.engine!='qemu' %}<div class="notice warning">{{ icon('info') }}<span>This control requires a stopped QEMU VM. Docker retains its managed internal network and does not support existing-instance reassignment.</span></div>
+{% elif section in ('network','ownership') %}
+{% set unavailable=metric.status!='stopped' or metric.blocking_jobs or (section=='ownership' and owners|length<2) %}
+{% if unavailable %}<div class="notice warning">{{ icon('info') }}<span>Verify the VM is stopped and resolve its blocking jobs before changing this setting.{% if section=='ownership' and owners|length<2 %} A different enabled owner account is also required.{% endif %}</span></div>{% endif %}
+<fieldset class="admin-control-form" {{ 'disabled' if unavailable }}>{% include 'admin/_'~section~'_form.html' %}</fieldset>
+{% else %}
+<p class="muted">Current administrative status: <strong>{{ 'Suspended' if vps.suspended else 'Not suspended' }}</strong>. Suspension requests a verified graceful stop; it never silently Force stops the guest. Unsuspending only permits future starts—it does not boot the VM.</p>
+{{ action(vps,'unsuspend' if vps.suspended else 'suspend','Unsuspend VPS' if vps.suspended else 'Suspend VPS','shield-off',confirmation='Change administrative suspension? Suspension first requests a graceful stop; unsuspending does not start the guest.',control={'enabled':not metric.blocking_jobs,'reason':'Resolve the blocking operation first.'}) }}
+{% endif %}
+</section></div>
+{% endblock %}

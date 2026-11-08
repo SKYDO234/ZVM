@@ -26,10 +26,10 @@ def test_public_pages_are_valid_html_with_valid_form_targets(client,path):
     parsed(client.get(path))
 
 
-@pytest.mark.parametrize('path',['/dashboard','/vps','/vps/create','/user','/profile','/settings','/admin','/docs'])
+@pytest.mark.parametrize('path',['/dashboard','/vps','/vps/create','/user','/profile','/settings','/admin','/admin/users','/admin/instances','/admin/plans','/admin/nodes','/admin/images','/admin/configuration','/admin/jobs','/admin/recovery','/admin/audit','/docs'])
 def test_authenticated_pages_are_valid_html(client,users,path):
     signin(client,'operator@example.test');root=parsed(client.get(path))
-    if path=='/admin':
+    if path=='/admin/nodes':
         nodes=[form for form in root.iter('form') if form.get('action')=='/admin/nodes']
         assert len(nodes)==1 and nodes[0].get('class')=='form-stack'
         assert {i.get('name') for i in nodes[0].iter('input')}>={'name','url','token','csrf_token'}

@@ -74,6 +74,9 @@ class NodeEngine:
     def reconcile(self, ident):
         return node_protocol.operation(self._request('POST', f'/v1/operations/{ident}/reconcile'), ident)
 
+    def close_power(self, ident):
+        return node_protocol.operation(self._request('POST', f'/v1/operations/{ident}/close-power'), ident)
+
     def _operate(self, kind, spec, operation_id=None, **kwargs):
         ident = operation_id or str(uuid.uuid4())
         result = self.operation_status(ident, missing_ok=True)

@@ -4,6 +4,7 @@ from extensions import db
 from models import Audit, Job, VPS
 from routes.vps import owned
 from services.resource_monitor import host_metrics, instance_metrics, totals
+from services.job_control import options as job_options
 
 bp = Blueprint('api', __name__, url_prefix='/api')
 
@@ -33,7 +34,7 @@ def job(ident):
     if item.owner_id != current_user.id and not current_user.is_admin:
         abort(404)
     return jsonify(id=item.id, status=item.status, message=item.message, instance_id=item.instance_id,
-                   exists=db.session.get(VPS, item.instance_id) is not None)
+                   exists=db.session.get(VPS, item.instance_id) is not None, **job_options(item, current_user))
 
 
 @bp.get('/activity')

@@ -6,6 +6,8 @@ from extensions import db
 from models import Audit, Job, Node, OSImage, ProvisionTicket, User, VPS
 from models.user import utcnow
 from services.provisioning import queue_action, queue_create
+from services.lifecycle import JobConflict
+from services.job_control import options as job_options
 from services.resource_monitor import host_metrics, instance_metrics
 from services.security import admin_required, decrypt, encrypt, integer, locked, settings, valid_uuid
 from services.validation import capacity_check, clean_spec, quota_check, select_node, user_limits
@@ -98,7 +100,8 @@ def job(ident):
     item = db.get_or_404(Job, ident)
     if item.owner_id != current_user.id and not current_user.is_admin:
         abort(404)
-    return render_template('job.html', job=item, vps=db.session.get(VPS, item.instance_id))
+    return render_template('job.html', job=item, vps=db.session.get(VPS, item.instance_id),
+                           job_options=job_options(item, current_user))
 
 
 @bp.get('/<ident>')
@@ -147,6 +150,11 @@ def action(ident, action):
             extra = {'spec': spec, 'credentials': credentials}
         job = queue_action(current_user, vps, action, extra)
         return redirect(url_for('vps.job', ident=job.id))
+    except JobConflict as exc:
+        flash(str(exc), 'info' if exc.duplicate else 'warning')
+        if current_user.is_admin or exc.job.owner_id == current_user.id:
+            return redirect(url_for('vps.job', ident=exc.job.id))
+        return redirect(url_for('vps.details', ident=ident))
     except EngineError as exc:
         flash(str(exc), 'error')
         return redirect(url_for('vps.details', ident=ident))

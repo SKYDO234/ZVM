@@ -87,6 +87,8 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         status=json.loads(cloud.stdout)
         assert status.get('status')=='done' and not status.get('errors'),status
         report['phase']='cloud-init-complete'
+        panel.interrupted_power_recovery()
+        report['interrupted_power_context']={'actual_guest_state_verified':True,'no_action_replayed':True,'owner_recovery_denied':True}
         report['phase']='sshx-guest-install-and-link-verification'
         panel.sshx(_host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command))
         assert panel.metrics()['status']=='running'

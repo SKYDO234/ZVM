@@ -147,7 +147,7 @@ def test_initial_password_can_use_api_and_forms_without_fabricating_guests(app, 
     assert db.session.scalar(db.select(db.func.count(Job.id))) == 0
     response = post(client, '/admin/plans', {'name': 'Initial admin plan', 'max_instances': '2',
                     'ram_mb': '1024', 'vcpus': '1', 'disk_gb': '16'}, token_path='/admin')
-    assert response.status_code == 302 and response.location.endswith('/admin#plans')
+    assert response.status_code == 302 and response.location.endswith('/admin/plans')
     assert db.session.scalar(db.select(Plan).where(Plan.name == 'Initial admin plan')) is not None
     assert client.get('/static/js/app.js').status_code == 200
     assert post(client, '/logout', token_path='/profile').status_code == 302

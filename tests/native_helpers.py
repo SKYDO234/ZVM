@@ -4,11 +4,12 @@ No fake engine, production database, public default credentials or resource mock
 """
 import secrets
 import time
+import uuid
 from extensions import db
 from models import Job, ProvisionTicket, User, VPS
 from services.provisioning import start_worker
 from services.background import stop_background
-from services.security import decrypt
+from services.security import decrypt, encrypt
 from tests.conftest import csrf_token
 
 
@@ -85,6 +86,45 @@ class NativePanel:
         response=self.client.get(f'/api/vps/{self.ident}/metrics')
         assert response.status_code==200
         return response.json
+
+    def interrupted_power_recovery(self, agent=None):
+        """Seed interrupted REQUEST CONTEXT, inspect a REAL running guest.
+
+        This is explicit metadata fault injection, not an actual worker-crash
+        test or a claim that the synthetic old Stop request was executed.
+        """
+        from models import AgentInstance, AgentOperation
+        before = self.spec()
+        job = Job(id=str(uuid.uuid4()), owner_id=self.owner.id, instance_id=self.ident,
+                  node_id=db.session.get(VPS, self.ident).node_id, kind='stop', engine=before['engine'], status='uncertain',
+                  payload=encrypt({'spec': before, 'actor_id': self.owner.id, 'actor_tag': self.owner.get_id()}),
+                  message='Native recovery acceptance: intentionally seeded interrupted request context.')
+        db.session.add(job)
+        db.session.commit()
+        ident = job.id
+        if agent is not None:
+            with agent.app_context():
+                real = db.session.get(AgentInstance, self.ident)
+                assert real is not None
+                db.session.add(AgentOperation(id=ident, digest='native-explicit-interrupted-request-context', status='uncertain',
+                               payload=encrypt({'kind': 'stop', 'spec': real.spec})))
+                db.session.commit()
+        denied = self.owner_client.post(f'/admin/jobs/{ident}/close-power',
+                                       data={'csrf_token': csrf_token(self.owner_client, '/profile')})
+        assert denied.status_code == 403
+        page = self.admin_client.get(f'/admin/recovery?instance={self.ident}')
+        assert page.status_code == 200 and ident.encode() in page.data
+        self.finish(self.post(f'/admin/jobs/{ident}/close-power', admin=True), expect='failed')
+        db.session.expire_all()
+        assert db.session.get(Job, ident).payload is None
+        assert 'not claimed' in db.session.get(Job, ident).message
+        assert self.metrics()['status'] == 'running' and self.spec() == before
+        if agent is not None:
+            with agent.app_context():
+                assert db.session.get(AgentOperation, ident).status == 'failed'
+                assert db.session.get(AgentOperation, ident).payload is None
+                assert db.session.get(AgentInstance, self.ident) is not None
+        return ident
 
     def sshx(self, expected_fingerprints, guest=None, orphan=False):
         """Actual guest installer/client, encrypted management key and real output link."""
