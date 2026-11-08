@@ -115,7 +115,9 @@ def test_initial_login_opens_dashboard_and_shows_nonblocking_reminder(app, clien
     assert any(form.get('action') == '/sessions/revoke' for form in profile.iter('form'))
 
 
-@pytest.mark.parametrize('path', ['/dashboard', '/admin', '/settings', '/vps', '/vps/create', '/user', '/profile', '/docs'])
+@pytest.mark.parametrize('path', ['/dashboard', '/admin', '/admin/users', '/admin/instances', '/admin/plans', '/admin/nodes',
+                                  '/admin/images', '/admin/configuration', '/admin/jobs', '/admin/recovery', '/admin/audit',
+                                  '/settings', '/vps', '/vps/create', '/user', '/profile', '/docs'])
 def test_initial_password_can_navigate_all_panel_routes(app, client, path):
     bootstrap_admin()
     initial_login(client)
@@ -147,7 +149,7 @@ def test_initial_password_can_use_api_and_forms_without_fabricating_guests(app, 
     assert db.session.scalar(db.select(db.func.count(Job.id))) == 0
     response = post(client, '/admin/plans', {'name': 'Initial admin plan', 'max_instances': '2',
                     'ram_mb': '1024', 'vcpus': '1', 'disk_gb': '16'}, token_path='/admin')
-    assert response.status_code == 302 and response.location.endswith('/admin#plans')
+    assert response.status_code == 302 and response.location.endswith('/admin/plans')
     assert db.session.scalar(db.select(Plan).where(Plan.name == 'Initial admin plan')) is not None
     assert client.get('/static/js/app.js').status_code == 200
     assert post(client, '/logout', token_path='/profile').status_code == 302

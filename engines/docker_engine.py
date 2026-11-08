@@ -172,6 +172,11 @@ class DockerEngine:
                     if action == 'delete':
                         self._remove_network(client, spec)
                         return {'status': 'deleted'}
+                    if action in ('stop', 'force_stop'):
+                        # A successful owned-container lookup returned NotFound;
+                        # no task can remain running. Delete may still need to
+                        # remove an orphaned managed network and panel metadata.
+                        return {'status': 'stopped'}
                     raise EngineError('Managed container no longer exists in Docker.')
                 if action == 'start':
                     container.start()

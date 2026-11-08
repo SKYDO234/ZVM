@@ -21,7 +21,7 @@ def test_real_docker_lifecycle_limits_and_writable_layer(app):
     engine=DockerEngine();capability=engine.capabilities()
     assert capability['available'],capability.get('reason')
     panel=NativePanel(app)
-    spec={'id':str(uuid.uuid4()),'owner_id':1,'name':'skvm-docker-check','engine':'docker','os_id':'ubuntu-24.04',
+    spec={'id':str(uuid.uuid4()),'owner_id':panel.owner.id,'name':'skvm-docker-check','engine':'docker','os_id':'ubuntu-24.04',
           'ram_mb':128,'vcpus':1,'disk_gb':1,'username':None,'ssh_port':None,'runtime':{},
           'allow_unenforced_storage':True,'forwards':[]}
     try:
@@ -32,6 +32,7 @@ def test_real_docker_lifecycle_limits_and_writable_layer(app):
         assert inspect_outcome('create',spec,{'spec':spec},engine)['status']=='stopped'
         panel.action('start')
         assert panel.metrics()['status']=='running'
+        panel.interrupted_power_recovery()
         with engine._client() as client:
             container=engine._container(client,spec)
             identity=container.exec_run(['id'],user='1000:1000',privileged=False)
@@ -71,7 +72,9 @@ def test_real_docker_lifecycle_limits_and_writable_layer(app):
         assert panel.metrics()['status']=='running'
         panel.action('force_stop')
         assert panel.metrics()['status']=='stopped'
-        panel.action('delete')
+        panel.action('start')
+        assert panel.owner.role=='user' and panel.metrics()['status']=='running'
+        panel.action('delete')  # Ordinary owner: graceful stop then actual resource/network deletion.
         assert engine.metrics(spec)['status']=='missing'
         assert db.session.scalar(db.select(db.func.count()).select_from(VPS))==0
     finally:
@@ -137,15 +140,18 @@ def test_real_external_node_tls_panel_queue_and_docker_guest(app,tmp_path,monkey
             assert db.session.get(AgentInstance,panel.ident) is not None
             assert db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status=='completed'))==1
         panel.action('start');assert panel.metrics()['status']=='running'
+        interrupted_id=panel.interrupted_power_recovery(agent=agent)
         with DockerEngine()._client() as native_client:
             result=DockerEngine()._container(native_client,data).exec_run(['id'],user='1000:1000',privileged=False)
             assert result.exit_code==0 and b'uid=1000' in result.output
         panel.action('stop');assert panel.metrics()['status']=='stopped'
-        panel.action('delete')
+        panel.action('start');panel.action('restart')
+        assert panel.owner.role=='user' and panel.metrics()['status']=='running'
+        panel.action('delete')  # One remote operation, with the node worker proving stop first.
         assert db.session.get(VPS,panel.ident) is None and node_engine.capabilities()['instances']==[]
         with agent.app_context():
             assert db.session.get(AgentInstance,panel.ident) is None
-            assert db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status!='completed'))==0
+            assert db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status!='completed',AgentOperation.id!=interrupted_id))==0
     finally:
         panel.close()
         assert stop_background(agent),'Do not tear down an agent while its real resource mutation is active.'

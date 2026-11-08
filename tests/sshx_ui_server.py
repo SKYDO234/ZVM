@@ -14,22 +14,52 @@ import sys
 import tempfile
 import uuid
 from unittest.mock import patch
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from engines.qemu_engine import QemuEngine
 from extensions import db
-from models import GuestAccess, User, VPS
+from models import GuestAccess, Job, User, VPS
 from services.background import stop_background
 from services.security import encrypt
 from skvm import create_app
 from tests.ssh_helpers import SSHProtocolServer
 
 
-class ProtocolFixtureMetrics:
+class ProtocolFixtureEngine:
+    """Explicit browser-only state machine: never launches an engine or shell."""
+    def __init__(self):
+        self.states = {}
+
     def metrics(self, spec):
-        return {'status': 'running', 'usage': {'pid': None, 'process_rss_mb': None,
-                                              'process_cpu_percent': None, 'disk_actual_bytes': None}}
+        return {'status': self.states.get(spec['id'], 'running'),
+                'usage': {'pid': None, 'process_rss_mb': None,
+                          'process_cpu_percent': None, 'disk_actual_bytes': None}}
+
+    def _process(self, spec):
+        # Explicitly synthetic identity boundary for browser recovery forms.
+        # This list is returned as data; no QEMU executable or shell is run.
+        return SimpleNamespace(cmdline=lambda: ['qemu-system-x86_64', '-m', str(spec['ram_mb']),
+                                                '-smp', str(spec['vcpus']), '-machine', 'type=pc,accel=tcg'])
+
+    def _ensure_disk_idle(self, spec):
+        assert self.states.get(spec['id']) == 'stopped'
+
+    def start(self, spec, **kwargs):
+        self.states[spec['id']] = 'running'
+        return {'status': 'running'}
+
+    def stop(self, spec, **kwargs):
+        self.states[spec['id']] = 'stopped'
+        return {'status': 'stopped'}
+
+    force_stop = stop
+
+    def delete(self, spec, **kwargs):
+        assert self.states[spec['id']] == 'stopped'
+        self.states[spec['id']] = 'missing'
+        return {'status': 'deleted'}
 
 
 with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as directory, SSHProtocolServer() as ssh:
@@ -46,7 +76,12 @@ with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as direct
         ident = re.search(r"^vm='([a-f0-9-]+)'", script, re.M)[1]
         return 0, 'SKVM_RUNNING\nSKVM_SECONDS:3600\nLink: https://sshx.io/s/ui-protocol-' + ident.replace('-', '') + '#SyntheticUIKey0001\n'
     ssh.program = program
-    with patch.object(QemuEngine, 'ssh_endpoint', lambda self, spec: ssh.endpoint), patch('services.resource_monitor.engine_for', return_value=ProtocolFixtureMetrics()):
+    engine = ProtocolFixtureEngine()
+    with (patch.object(QemuEngine, 'ssh_endpoint', lambda self, spec: ssh.endpoint),
+          patch('services.resource_monitor.engine_for', return_value=engine),
+          patch('services.provisioning.engine_for', return_value=engine),
+          patch('services.job_control.engine_for', return_value=engine),
+          patch('services.provisioning.capacity_check', return_value=None)):
         app = create_app({'TESTING': True, 'TEST_MODE': False, 'DATA_DIR': root / 'data',
                           'SQLALCHEMY_DATABASE_URI': f'sqlite:///{root / "panel.db"}', 'SECRET_KEY': secrets.token_hex(48),
                           'START_WORKER': True, 'BOOTSTRAP_ADMIN': False, 'SESSION_COOKIE_SECURE': False})
@@ -72,8 +107,30 @@ with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as direct
                         db.session.add(GuestAccess(instance_id=instance.id,
                                                    private_key_encrypted=encrypt({'private_key': ssh.private_key()})))
                     instances.append(instance.id)
+                lifecycle = VPS(id=str(uuid.uuid4()), owner_id=owner.id, name='lifecycle-' + project,
+                                engine='qemu', os_id='ubuntu-24.04', ram_mb=512, vcpus=1, disk_gb=8,
+                                username='guest', ssh_port=ssh.endpoint[1], runtime={'network_restricted': True})
+                db.session.add(lifecycle)
+                db.session.flush()
+                engine.states[lifecycle.id] = 'stopped'
+                operator = User(name='Browser recovery operator ' + project, email='recovery-admin-' + project + '@example.test', role='admin')
+                operator.set_password(password)
+                db.session.add(operator)
+                blocked = VPS(id=str(uuid.uuid4()), owner_id=owner.id, name='blocked-' + project,
+                              engine='qemu', os_id='ubuntu-24.04', ram_mb=512, vcpus=1, disk_gb=8,
+                              username='guest', ssh_port=ssh.endpoint[1], runtime={'network_restricted': True})
+                db.session.add(blocked)
+                db.session.flush()
+                engine.states[blocked.id] = 'running'
+                request = Job(owner_id=owner.id, instance_id=blocked.id, kind='stop', engine='qemu', status='uncertain',
+                              message='Explicitly synthetic browser interrupted-request context; no real guest command was executed.',
+                              payload=encrypt({'spec': blocked.spec(), 'actor_id': owner.id}))
+                db.session.add(request)
+                db.session.flush()
                 state[project] = {'email': owner.email, 'password': password, 'other_email': other.email,
-                                  'managed_id': instances[0], 'enroll_id': instances[1], 'guest_password': ssh.password}
+                                  'managed_id': instances[0], 'enroll_id': instances[1], 'guest_password': ssh.password,
+                                  'lifecycle_id': lifecycle.id, 'blocked_id': blocked.id, 'blocked_job': request.id,
+                                  'admin_email': operator.email}
             db.session.commit()
         destination = ROOT / 'test-results' / '.sshx-ui-credentials.json'
         destination.parent.mkdir(parents=True, exist_ok=True)

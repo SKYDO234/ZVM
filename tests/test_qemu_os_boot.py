@@ -64,7 +64,7 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
     for folder in ('vms','images','locks','logs'):(root/folder).mkdir()
     image=db.session.get(OSImage,'ubuntu-24.04');image.sha256=pin;db.session.commit()
     engine=QemuEngine();panel=NativePanel(app)
-    data={'id':str(uuid.uuid4()),'owner_id':1,'name':'skvm-real-boot','engine':'qemu','os_id':image.id,
+    data={'id':str(uuid.uuid4()),'owner_id':panel.owner.id,'name':'skvm-real-boot','engine':'qemu','os_id':image.id,
           'ram_mb':768,'vcpus':1,'disk_gb':10,'username':'skvmcheck','ssh_port':allocate_port(),
           'runtime':{},'forwards':[]}
     report={'test':'real Ubuntu 24.04 boot','started_at':datetime.now(timezone.utc).isoformat(),'phase':'preflight','passed':False,'image_sha256':pin,'accel':'tcg','allocation':{'ram_mb':768,'vcpus':1,'disk_gb':10}}
@@ -87,6 +87,8 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         status=json.loads(cloud.stdout)
         assert status.get('status')=='done' and not status.get('errors'),status
         report['phase']='cloud-init-complete'
+        panel.interrupted_power_recovery()
+        report['interrupted_power_context']={'actual_guest_state_verified':True,'no_action_replayed':True,'owner_recovery_denied':True}
         report['phase']='sshx-guest-install-and-link-verification'
         panel.sshx(_host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command))
         assert panel.metrics()['status']=='running'
@@ -117,6 +119,10 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         assert block.returncode==0 and int(block.stdout.strip())==11*2**30
         report['resized_guest_block_bytes']=int(block.stdout.strip())
         report['phase']='restarted-and-persistence-verified'
+        panel.action('restart');_wait_for_ssh(key,data['ssh_port'])
+        persisted=_ssh(key,data['ssh_port'],'cat ~/skvm-persistence-check')
+        assert persisted.returncode==0 and persisted.stdout==marker
+        report['owner_restart_verified']=True
         panel.action('stop')
         # Reinstall must replace only this guest, clear old data, and accept its key.
         panel.action('reinstall',{'os_id':image.id,'username':'skvmcheck','auth_method':'key','public_key':public})
@@ -129,9 +135,9 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         absent=_ssh(key,data['ssh_port'],'test ! -e ~/skvm-persistence-check')
         assert absent.returncode==0
         report['phase']='reinstall-verified'
-        panel.action('force_stop')
-        assert panel.metrics()['status']=='stopped'
-        panel.action('delete')
+        assert panel.owner.role=='user' and panel.metrics()['status']=='running'
+        panel.action('delete')  # Owner's one job must prove graceful stop before storage removal.
+        report['owner_running_delete_verified']=True
         assert not instance_dir(data['id']).exists()
         assert db.session.scalar(db.select(db.func.count()).select_from(VPS))==0
         report.update(phase='deleted',passed=True)

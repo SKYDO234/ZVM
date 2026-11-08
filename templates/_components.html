@@ -1,9 +1,9 @@
 {% macro icon(name, cls='') -%}<i data-lucide="{{ name }}" class="{{ cls }}" aria-hidden="true"></i>{%- endmacro %}
 {% macro csrf() -%}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{%- endmacro %}
 {% macro badge(status, instance_id='') -%}<span class="status status-{{ status }}"{% if instance_id %} data-instance-status="{{ instance_id }}"{% endif %}><span class="status-dot"></span>{{ status|replace('_',' ')|title }}</span>{%- endmacro %}
-{% macro action(vps, kind, label, symbol, style='btn-secondary', confirmation='') -%}
-<form method="post" action="{{ url_for('vps.action', ident=vps.id, action=kind) }}" class="inline-form"{% if confirmation %} data-confirm="{{ confirmation }}"{% endif %}>
-{{ csrf() }}<button class="btn {{ style }} btn-sm" type="submit">{{ icon(symbol) }}<span>{{ label }}</span></button></form>
+{% macro action(vps, kind, label, symbol, style='btn-secondary', confirmation='', control=none) -%}
+<form method="post" action="{{ url_for('vps.action', ident=vps.id, action=kind) }}" class="inline-form" data-instance-id="{{ vps.id }}" data-instance-action="{{ kind }}"{% if confirmation %} data-confirm="{{ confirmation }}"{% endif %}>
+{{ csrf() }}<button class="btn {{ style }} btn-sm" type="submit"{% if control and not control.enabled %} disabled title="{{ control.reason }}"{% endif %}>{{ icon(symbol) }}<span>{{ label }}</span></button></form>
 {%- endmacro %}
 {% macro os_icon(os_id) -%}<span class="os-icon os-{{ os_id.split('-')[0] }}">{{ icon('terminal' if 'ubuntu' not in os_id else 'circle-dot') }}</span>{%- endmacro %}
 {% macro engine_card(kind, cap) -%}

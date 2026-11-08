@@ -4,7 +4,7 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
-**Current revision:** Console/WebSSH have been replaced by **Generate SSHX** on VPS Details, administrator-only provisioning/assignment and a separate user workspace. See [SSHX setup and its external-access security boundary](docs/sshx.md) and [current validation/equipped-host checks](docs/testing.md). **All six CI jobs passed** for application/test source `2c874d8` in [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), including actual Ubuntu/TCG guest SSHX installation, captured-link display and verified client shutdown. Documentation-only follow-ups do not change that tested source.
+**Current revision:** Admin controls have dedicated pages for Users, Instances, Plans, External nodes, OS images, Configuration, Jobs, Recovery and Audit, plus separate per-VM Network, Ownership and Suspension pages. Details/My VPS identify blocking operations instead of only displaying a generic active-job error. Conflicting retries open the authorized existing job without queueing duplicate work. Recovery inspects real outcomes, can cancel an unclaimed request, and can close an interrupted basic power request as failed/unconfirmed only after proving current state—never by clearing live locks or storage reservations. Owner power/delete, admin-only creation/assignment and guest-only **Generate SSHX** remain intact. See [blocked-operation recovery](docs/operations.md), [SSHX security](docs/sshx.md) and [exact validation scopes/revisions](docs/testing.md).
 
 ## The uploaded `n.txt` is the reference
 
@@ -42,6 +42,14 @@ Background logs are `data/logs/panel.error.log` / `panel.access.log`; the master
 
 `python skvm.py` **still works** and automatically uses `.venv/bin/python`. Node/npm are build-time only; browser dependencies are bundled locally, without CDN requirements. A newly downloaded Node runtime lives in ignored `.local/node`; the installer reuses it (for manual npm work, add `.local/node/bin` to `PATH`). Legacy `scripts/install.sh` delegates to the root installer; `scripts/install-codespaces.sh` remains a setup-only compatibility wrapper.
 
+### Owner power controls and deletion
+
+Open **My VPS → Manage** or use the buttons directly on your instance card. Start is enabled for verified stopped guests; Stop and Restart reflect the observed state. Details refreshes availability from the metrics API, including changes made in another tab. Pending work disables conflicting actions, and suspended guests cannot be started/restarted. These are UI hints in addition to backend ownership, session, CSRF and worker checks—not replacements for them.
+
+**Delete** is available to the assigned owner and administrators, including for a running or suspended VPS. Confirming it queues one operation that requests graceful shutdown, verifies the guest is stopped, then removes only that instance’s storage/resources and metadata. If shutdown fails or its outcome is unknown, deletion is aborted: **no automatic Force stop**, fake success or quota release. You may explicitly Force stop with its separate data-loss warning, then retry deletion. An unreachable node or an uncertain storage/provisioning operation still requires inspection/reconciliation; it is never bypassed by deleting a database row.
+
+Administrator-requested power jobs are visible to the assigned owner, while audit entries retain the actual requesting administrator. Update/restart both panel and external agents for the new stop-before-delete flow. Existing accounts, guests and saved credentials are not reset.
+
 ### SSHX guest access
 
 The panel runs the requested `curl -sSf https://sshx.io/get | sh`, then `sshx`, **inside the selected managed QEMU VM**, never on the host. New VMs receive unique encrypted management keys alongside the owner’s native authentication. Existing VMs enroll once using their current guest credential and an independently confirmed SSH host fingerprint; no reinstall/reset is required.
@@ -55,8 +63,8 @@ Only the VM owner or an administrator can generate, view, copy or stop its real 
 Existing installations need updated dependencies and **all old workers restarted**, not a database reset:
 
 ```bash
-bash install.sh --no-start
 .venv/bin/python scripts/serve-panel.py --stop
+bash install.sh --no-start
 .venv/bin/python scripts/serve-panel.py --background
 ```
 
@@ -127,7 +135,7 @@ The backend builds controlled argument lists for `qemu-system-x86_64`, `qemu-img
 - Independent `Popen` processes, per-VM `flock` locks, private Unix QMP control sockets, persisted PID **and creation time**, exact UUID/disk matching, and recovery of a matching process if its metadata was lost.
 - **Start** initially pauses the virtual CPUs until the QMP monitor is ready, then explicitly resumes and verifies the machine. It requires a responsive QMP monitor and a running QMP machine state. That proves a QEMU process is running, **not** that cloud-init or SSH is ready. If a resume reply is lost, the process is kept and the job becomes uncertain; no potentially live guest is silently killed.
 - **Stop** sends QMP `system_powerdown` (ACPI). It waits up to 180 seconds to accommodate slow TCG shutdown/services; a still-running guest is then reported honestly; it is **not** silently killed. **Force stop** is separate, explicit and warns about data loss.
-- Restart, stopped-only deletion, **grow-only** disk resizing, and stopped-only OS reinstall. Reinstall retains the old disk until the new image/seed is prepared. Growing the virtual disk may still require `growpart`/`resize2fs`/`xfs_growfs` inside the guest.
+- Restart and panel deletion both require a proven graceful stop before proceeding. Owners can delete their running VPS in one confirmed job; a failed shutdown never falls back to Force stop. Low-level disk deletion still refuses a running/open disk. **Grow-only** disk resizing and OS reinstall remain stopped-only. Reinstall retains the old disk until the new image/seed is prepared. Growing the virtual disk may still require `growpart`/`resize2fs`/`xfs_growfs` inside the guest.
 - Emulator/serial boot logs remain internal for bounded operator troubleshooting; the maintenance loop trims logs above 5 MiB to the latest 1 MiB. There is no public serial-input/Console endpoint. Interactive access is the guest’s native SSH or its explicitly generated SSHX capability.
 
 ### OS catalog derived from `n.txt`
@@ -180,7 +188,7 @@ Containers have:
 - UID/GID **1000:1000**, all capabilities dropped, `no-new-privileges`, no privileged flag, no host mounts/socket, and no host namespaces.
 - Their own SKVM-labeled **internal bridge network**, separate from QEMU and other guest networks. No automatic public port or SSH server. Use trusted operator daemon tooling or an operator-approved deployment architecture for application networking.
 - Exact instance/owner labels checked before every lifecycle operation.
-- Start, stop, restart, explicit force-stop, stopped-only delete, actual cgroup metrics and writable-layer usage.
+- Owner start, stop, restart, explicit force-stop and confirmed stop-then-delete, with actual cgroup metrics and writable-layer usage. A verified missing container can still have its owned orphan network/panel metadata cleaned up; an unreachable daemon is not treated as absence.
 - Fixed allowlisted diagnostics (`id`, `uname -a`, `df -h`, `ps aux`, `/etc/os-release`), never a web-accessible host shell. Some minimal images omit utilities; actual nonzero exit codes are displayed.
 
 **Storage enforcement:** Docker's writable-rootfs quota is storage-driver dependent. SKVM does not assume overlay2 supports it. Only after the operator verifies driver prerequisites (e.g. XFS project quotas), set `SKVM_DOCKER_STORAGE_LIMITS=1`. The real daemon must accept the storage option. Otherwise the user must explicitly accept a **budget-only** disk allocation, clearly marked “not enforced”. Layer usage is not the host's total disk or a fabricated guest capacity. In-place reinstall and rootfs resizing are deliberately unsupported for Docker; create a replacement.
@@ -269,7 +277,7 @@ Browser tests use **separate temporary databases** on ports 5558/5559, never the
 Unit tests isolate engine/transport boundaries explicitly. **Separate native acceptance** exercises the real Flask routes, one-use confirmation, durable jobs and actual background consumers:
 
 - Actual standalone QCOW2/CIDATA, TCG process/QMP, duplicate-start protection, growth and deletion.
-- A trusted-pin Ubuntu 24.04 **TCG** boot, real cloud-init and SSH key authentication, guest-visible 768 MiB/1 vCPU and disk growth to 11 GiB, suspension policy, persistence, reinstall, force stop and deletion; actual guest SSHX installation/link display/stop before and after reinstall, including stale PID and orphan-client recovery.
+- Admin provisioning to a **regular assigned owner**, then a trusted-pin Ubuntu 24.04 **TCG** boot, real cloud-init/SSH, guest-visible 768 MiB/1 vCPU and disk growth to 11 GiB, suspension policy, owner restart/persistence/reinstall and running-guest stop-then-delete. Actual guest SSHX installation/link display/stop before and after reinstall includes stale PID/orphan-client recovery and a repeated Start that must preserve the live capability. Force-stop process identity is exercised separately by native blank-QEMU and Docker acceptance.
 - Actual Docker memory/CPU/PID limits, isolation/internal network, writable-layer telemetry and lifecycle/persistence.
 - Panel → real TLS/bearer agent → actual agent worker → real Docker guest, with separate databases and inventory/diagnostic/deletion checks. Only TCP dialing is routed to an ephemeral loopback port; TLS, HTTP, engines and resources are not mocked.
 

@@ -128,6 +128,18 @@ def operation_reconcile(ident):
         return jsonify(error=str(exc)), 409
 
 
+@node_api.post('/operations/<ident>/close-power')
+def operation_close_power(ident):
+    from services.node_worker import close_power_operation
+    try:
+        valid_uuid(ident)
+        operation = close_power_operation(ident)
+        return jsonify(id=operation.id, status=operation.status, result=operation.result, error=operation.error)
+    except EngineError as exc:
+        db.session.rollback()
+        return jsonify(error=str(exc)), 409
+
+
 @node_api.get('/instances/<ident>')
 def instance_status(ident):
     instance = db.get_or_404(AgentInstance, ident)

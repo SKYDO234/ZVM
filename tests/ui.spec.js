@@ -46,15 +46,18 @@ test('admin plans, quotas, node form, catalog, settings and guarded account dele
   page.on('pageerror',error=>errors.push(error.message));
   await signIn(page,state.admin);await page.goto('/admin');
   await expect(page.getByRole('heading',{name:'Admin control.'})).toBeVisible();
+  await page.goto('/admin/nodes');
   const node=page.locator('form[action="/admin/nodes"]');await expect(node).toHaveCount(1);
   await node.locator('[name=name]').fill('Browser node '+testInfo.project.name);
   await node.locator('[name=url]').fill('https://unallowlisted.example.test');await node.locator('[name=token]').fill(crypto.randomBytes(24).toString('hex'));
   await node.getByRole('button',{name:'Connect & verify node'}).click();
-  await expect(page.locator('.toast-error')).toContainText('allowlist');await expect(page).toHaveURL(/\/admin#nodes$/);
+  await expect(page.locator('.toast-error')).toContainText('allowlist');await expect(page).toHaveURL(/\/admin\/nodes$/);
+  await page.goto('/admin/plans');
   const planName='Browser plan '+testInfo.project.name, plan=page.locator('#plans form.plan-edit-row').last();
   await plan.locator('[name=name]').fill(planName);
   for(const [key,value] of Object.entries({max_instances:2,ram_mb:1024,vcpus:1,disk_gb:16}))await plan.locator(`[name=${key}]`).fill(String(value));
   await plan.getByRole('button',{name:'Create',exact:true}).click();await expect(page.locator('.toast-success')).toBeVisible();
+  await page.goto('/admin/users');
   let user=page.locator('form.user-edit-row').filter({hasText:managed.email});
   await user.locator('[name=plan_id]').selectOption({label:planName});await user.locator('[name=enabled]').uncheck();
   await user.getByRole('button',{name:'Save',exact:true}).click();await expect(page.locator('.toast-success')).toBeVisible();
@@ -64,12 +67,15 @@ test('admin plans, quotas, node form, catalog, settings and guarded account dele
   await blocked.getByRole('button',{name:'Sign in to workspace'}).click();await expect(blocked.locator('.toast-error')).toContainText('Invalid email or password');
   await guestContext.close();
   await user.locator('[name=enabled]').check();await user.getByRole('button',{name:'Save',exact:true}).click();
+  await page.goto('/admin/images');
   const image=page.locator('details.image-admin').filter({hasText:'Ubuntu 24.04'});await image.locator('summary').click();
   const imageForm=image.locator('form').first();await imageForm.locator('[name=sha256]').fill('a'.repeat(64));
   await imageForm.getByRole('button',{name:'Save configuration'}).click();await expect(page.locator('.toast-success')).toBeVisible();
+  await page.goto('/admin/configuration');
   const settings=page.locator('#configuration form');await settings.locator('[name=max_instances_per_user]').fill('4');
   await settings.getByRole('button',{name:/Save/}).click();await expect(page.locator('.toast-success')).toBeVisible();
   await expect(page.locator('#configuration [name=max_instances_per_user]')).toHaveValue('4');
+  await page.goto('/admin/users');
   const remove=page.locator('form.user-delete-row').filter({has:page.locator(`input[name=confirmation][value="${managed.email}"]`)});
   await remove.getByRole('button',{name:'Delete account'}).click();await expect(page.locator('#confirm-dialog')).toBeVisible();
   await page.locator('#cancel-confirm').click();await expect(remove).toBeVisible();
@@ -117,7 +123,7 @@ test('default administrator can navigate and use buttons before replacing the in
   await signIn(page,account);
   await expect(page.locator('[data-initial-password-reminder]')).toBeVisible();
   const destinations=[['Create VPS','/vps/create'],['All VPS','/vps'],
-    ['Profile','/profile'],['Settings','/settings'],['Admin control','/admin'],['Documentation','/docs'],['Admin overview','/dashboard']];
+    ['Profile','/profile'],['Settings','/settings'],['Admin control','/admin'],['Users','/admin/users'],['Instances','/admin/instances'],['Plans','/admin/plans'],['External nodes','/admin/nodes'],['OS images','/admin/images'],['Configuration','/admin/configuration'],['Jobs','/admin/jobs'],['Recovery','/admin/recovery'],['Audit log','/admin/audit'],['Documentation','/docs'],['Admin overview','/dashboard']];
   for(const [name,destination] of destinations){
     if(testInfo.project.name==='android')await page.getByRole('button',{name:'Toggle navigation'}).click();
     const response=page.waitForResponse(response=>new URL(response.url()).pathname===destination&&response.request().isNavigationRequest());
@@ -132,7 +138,7 @@ test('default administrator can navigate and use buttons before replacing the in
   await page.getByRole('button',{name:'Recent activity'}).click();expect((await activity).status()).toBe(200);
   await expect(page.locator('#activity-drawer')).toBeVisible();await expect(page.locator('#activity-items')).not.toContainText('Loading');
   await page.getByRole('button',{name:'Close activity'}).click();await expect(page.locator('#activity-drawer')).toBeHidden();
-  await page.goto('/admin');const planName='Initial admin plan '+testInfo.project.name,plan=page.locator('#plans form.plan-edit-row').last();
+  await page.goto('/admin/plans');const planName='Initial admin plan '+testInfo.project.name,plan=page.locator('#plans form.plan-edit-row').last();
   await plan.locator('[name=name]').fill(planName);
   for(const [key,value] of Object.entries({max_instances:2,ram_mb:1024,vcpus:1,disk_gb:16}))await plan.locator(`[name=${key}]`).fill(String(value));
   await plan.getByRole('button',{name:'Create',exact:true}).click();await expect(page.locator('.toast-success')).toBeVisible();

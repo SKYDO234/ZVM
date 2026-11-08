@@ -123,6 +123,38 @@ def _running_qemu(engine, spec):
     return spec.get('runtime', {}) | {'accel': accel[1]}
 
 
+def inspect_power_state(spec, engine):
+    """Prove a stable current state, not that an interrupted action succeeded."""
+    try:
+        metric = engine.metrics(spec)
+        state = metric.get('status') if isinstance(metric, dict) else None
+        if state not in ('running', 'stopped'):
+            raise EngineError('Current running/stopped state cannot be proven. The uncertain request and its context were retained.')
+        if spec['engine'] == 'qemu':
+            if state == 'running':
+                _running_qemu(engine, spec)
+            else:
+                engine._ensure_disk_idle(spec)
+        elif spec['engine'] == 'docker':
+            with engine._client() as client:
+                container = engine._container(client, spec)
+                if container is None:
+                    raise EngineError('The owned container is missing; power state is not proven.')
+                host = container.attrs.get('HostConfig', {})
+                if host.get('Memory') != spec['ram_mb'] * 2**20 or host.get('NanoCpus') != spec['vcpus'] * 10**9:
+                    raise EngineError('Actual Docker CPU/memory limits differ from this managed allocation.')
+                observed = 'stopped' if container.status in ('created', 'exited') else container.status
+                if observed != state:
+                    raise EngineError('Container state changed during inspection. Retry after it is stable.')
+        else:
+            raise EngineError('Unsupported engine for power-state inspection.')
+        return state
+    except EngineError:
+        raise
+    except Exception as exc:
+        raise EngineError('Current managed instance state cannot be safely inspected; the request remains uncertain.') from exc
+
+
 def inspect_outcome(kind, spec, payload, engine):
     try:
         if kind in ('network', 'assign'):
@@ -173,12 +205,16 @@ def inspect_outcome(kind, spec, payload, engine):
                     else:
                         raise EngineError('The guest network still exists. Inspect/clean it before reconciliation; it was not automatically removed.')
             return {'status': 'deleted'}
-        if kind in ('start', 'restart', 'stop', 'force_stop', 'suspend'):
+        if kind == 'restart':
+            raise EngineError('Current running state alone cannot prove an interrupted restart occurred. Use Close interrupted power request to inspect stable state and record the old request as failed/unconfirmed; it is never replayed.')
+        if kind in ('start', 'stop', 'force_stop', 'suspend'):
             metric = engine.metrics(spec)
             wanted = 'running' if kind in ('start', 'restart') else 'stopped'
             if metric.get('status') != wanted:
                 raise EngineError(f'Actual engine state does not prove {kind} completed; reservation retained.')
             result = {'status': wanted}
+            if kind == 'start':
+                result.update(already_running=True, inspection_only=True)
             if spec['engine'] == 'qemu':
                 if wanted == 'running':
                     result['runtime'] = _running_qemu(engine, spec)

@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% from '_components.html' import icon, csrf, action, badge, engine_card %}
+{% set admin_header = namespace(title='Admin control', description='Dedicated operator controls.') %}
+{% for key,label,symbol,description in admin_pages if key==admin_page %}{% set admin_header.title=label %}{% set admin_header.description=description %}{% endfor %}
+{% block title %}{{ admin_header.title }} · SKVM{% endblock %}
+{% block breadcrumb %}Administration / {{ admin_header.title }}{% endblock %}
+{% block content %}
+<div data-admin-page="{{ admin_page }}">
+  <div class="page-intro"><div><div class="eyebrow">OPERATOR ACCESS</div><h1>{% block admin_heading %}{{ admin_header.title }}{% endblock %}<span class="title-dot">.</span></h1><p>{{ admin_header.description }}</p></div><span class="admin-access">{{ icon('shield-check') }}Administrator only</span></div>
+  <nav class="admin-tabs" aria-label="Admin controls">{% for key,label,symbol,description in admin_pages %}<a href="{{ url_for('admin.'~key) }}" class="{{ 'active' if key==admin_page }}" {{ 'aria-current=page' if key==admin_page }}>{{ icon(symbol) }}{{ label }}</a>{% endfor %}</nav>
+  {% block admin_content %}{% endblock %}
+</div>
+{% endblock %}

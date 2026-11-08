@@ -1,0 +1,7 @@
+{% extends 'admin/base.html' %}
+{% block admin_content %}
+<section class="card admin-section" id="instances"><div class="card-heading"><h3>All provisioned instances</h3><a class="btn btn-primary btn-sm" href="{{ url_for('vps.create') }}">{{ icon('plus') }}Create VPS</a></div><div class="table-scroll"><table><thead><tr><th>INSTANCE</th><th>OWNER</th><th>ALLOCATION</th><th>ADMIN PAGES</th></tr></thead><tbody>
+{% for v in instances %}<tr><td><a class="text-link" href="{{ url_for('vps.details',ident=v.id) }}">{{ v.name }} {{ icon('arrow-up-right') }}</a><small>{{ v.engine|upper }} · {{ v.os_id }}</small></td><td>{{ v.owner.email }}</td><td>{{ v.ram_mb }} MiB · {{ v.vcpus }} vCPU · {{ v.disk_gb }} GiB</td><td><div class="action-wrap"><a class="btn btn-secondary btn-sm" href="{{ url_for('vps.details',ident=v.id) }}">Manage</a>{% if v.engine=='qemu' %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin.instance_control',ident=v.id,section='network') }}">Network</a><a class="btn btn-secondary btn-sm" href="{{ url_for('admin.instance_control',ident=v.id,section='ownership') }}">Ownership</a>{% endif %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin.instance_control',ident=v.id,section='suspension') }}">Suspension</a><a class="btn btn-ghost btn-sm" href="{{ url_for('admin.recovery',instance=v.id) }}">Recovery</a></div></td></tr>
+{% else %}<tr><td colspan="4" class="table-empty">No real instances have been provisioned.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

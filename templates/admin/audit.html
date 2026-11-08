@@ -1,0 +1,5 @@
+{% extends 'admin/base.html' %}
+{% block admin_content %}
+<section class="card" id="audit"><div class="card-heading"><h3>Platform audit log</h3><span class="muted">Security history · no credentials recorded</span></div><div class="table-scroll"><table><thead><tr><th>ACTION</th><th>USER</th><th>MESSAGE</th><th>DATE</th></tr></thead><tbody>{% for a in activity %}<tr><td><code>{{ a.action }}</code></td><td>{{ '# '~a.user_id if a.user_id else 'Anonymous / deleted account' }}</td><td class="wrap-cell">{{ a.message }}</td><td class="nowrap">{{ a.created_at|datetime }}</td></tr>{% else %}<tr><td colspan="4" class="table-empty">No audit activity yet.</td></tr>{% endfor %}</tbody></table></div></section>
+{% include 'admin/_pagination.html' %}
+{% endblock %}

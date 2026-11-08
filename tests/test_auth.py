@@ -43,7 +43,9 @@ def test_admin_authorization_and_rendering(client, users):
     post(client, '/logout')
     signin(client, 'operator@example.test')
     response = client.get('/admin')
-    assert response.status_code == 200 and b'Operating system image catalog' in response.data
+    assert response.status_code == 200 and b'href="/admin/images"' in response.data
+    images = client.get('/admin/images')
+    assert images.status_code == 200 and b'Operating system image catalog' in images.data
 
 
 def test_all_pages_are_connected(client, users):
