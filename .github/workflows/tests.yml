@@ -93,7 +93,7 @@ jobs:
       - name: Publish all catalog verification results
         if: always()
         run: python scripts/report-ci.py catalog "$RUNNER_TEMP/image-catalog.json"
-      - name: Real panel confirmation, queued worker, cloud-init, SSH and lifecycle
+      - name: Real panel confirmation, queued worker, cloud-init, guest SSHX and lifecycle
         run: python -m pytest tests/test_qemu_os_boot.py -q -rs --junitxml="$RUNNER_TEMP/qemu-panel.xml"
       - name: Publish readable real-guest diagnostics
         if: always()

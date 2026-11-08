@@ -6,7 +6,7 @@ from extensions import db
 from models import Audit, Job, Node, OSImage, Plan, ProvisionTicket, Setting, User, VPS
 from services.image_manager import ImageManager
 from services.provisioning import reconcile_job
-from services.security import admin_required, audit, encrypt, integer, settings, validate_url
+from services.security import admin_required, audit, encrypt, integer, settings, validate_url, locked
 
 bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -86,22 +86,29 @@ def update_user(ident):
 def delete_user(ident):
     user = db.get_or_404(User, ident)
     try:
-        if user.id == current_user.id:
-            raise EngineError('You cannot delete your current administrator account.')
-        if request.form.get('confirmation', '').strip().lower() != user.email:
-            raise EngineError('Account-deletion confirmation is required.')
-        if db.session.scalar(db.select(VPS.id).where(VPS.owner_id == user.id).limit(1)):
-            raise EngineError('Delete this user’s instances safely before deleting their account.')
-        if db.session.scalar(db.select(Job.id).where(Job.owner_id == user.id, Job.status.in_(['queued', 'running', 'uncertain'])).limit(1)):
-            raise EngineError('Resolve this user’s active or uncertain jobs before deleting their account.')
-        db.session.execute(db.delete(ProvisionTicket).where(ProvisionTicket.owner_id == user.id))
-        db.session.execute(db.delete(Job).where(Job.owner_id == user.id))
-        # Preserve security history without dangling foreign keys or a fabricated new actor.
-        db.session.execute(db.update(Audit).where(Audit.user_id == user.id).values(user_id=None))
-        audit('admin.user_deleted', f'Permanently deleted account #{user.id} after checking its resources and jobs.')
-        db.session.delete(user)
-        db.session.commit()
-        flash('Account deleted. Security audit history was retained and old sessions are invalid.', 'success')
+        with locked('allocation'):
+            if user.id == current_user.id:
+                raise EngineError('You cannot delete your current administrator account.')
+            if request.form.get('confirmation', '').strip().lower() != user.email:
+                raise EngineError('Account-deletion confirmation is required.')
+            if db.session.scalar(db.select(VPS.id).where(VPS.owner_id == user.id).limit(1)):
+                raise EngineError('Delete this user’s instances safely before deleting their account.')
+            if db.session.scalar(db.select(Job.id).where(Job.owner_id == user.id, Job.status.in_(['queued', 'running', 'uncertain'])).limit(1)):
+                raise EngineError('Resolve this user’s active or uncertain jobs before deleting their account.')
+            # Creation/assignment reservations belong to the target owner. Preserve
+            # a different administrator actor until their in-flight work completes.
+            from services.security import decrypt
+            for pending in db.session.scalars(db.select(Job).where(Job.owner_id != user.id, Job.status.in_(['queued', 'running', 'uncertain']))):
+                if pending.payload and decrypt(pending.payload).get('actor_id') == user.id:
+                    raise EngineError('Resolve operations requested by this administrator for other owners before deleting their account.')
+            db.session.execute(db.delete(ProvisionTicket).where(ProvisionTicket.owner_id == user.id))
+            db.session.execute(db.delete(Job).where(Job.owner_id == user.id))
+            # Preserve security history without dangling foreign keys or a fabricated new actor.
+            db.session.execute(db.update(Audit).where(Audit.user_id == user.id).values(user_id=None))
+            audit('admin.user_deleted', f'Permanently deleted account #{user.id} after checking its resources and jobs.')
+            db.session.delete(user)
+            db.session.commit()
+            flash('Account deleted. Security audit history was retained and old sessions are invalid.', 'success')
     except EngineError as exc:
         db.session.rollback()
         flash(str(exc), 'error')

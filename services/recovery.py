@@ -4,6 +4,7 @@ Reconciliation never starts/stops a process, removes storage/networks, or resize
 disk. A proven resize may synchronize the controller's JSON manifest only.
 """
 import json
+import hashlib
 import re
 from docker.errors import NotFound
 from docker.utils import parse_bytes
@@ -124,6 +125,24 @@ def _running_qemu(engine, spec):
 
 def inspect_outcome(kind, spec, payload, engine):
     try:
+        if kind in ('network', 'assign'):
+            if spec['engine'] != 'qemu':
+                raise EngineError('Only stopped managed QEMU guests support this recovery.')
+            engine._ensure_disk_idle(spec)
+            saved = _manifest(spec | ({'owner_id': payload['owner_id']} if kind == 'assign' else {}))
+            if kind == 'network' and saved['runtime']['network_restricted'] is not payload['network_restricted']:
+                raise EngineError('The requested network policy is not proven in the VM manifest.')
+            return {'status': 'stopped', 'runtime': saved['runtime'], 'owner_id': saved['owner_id']}
+        if kind == 'reinstall':
+            if spec['engine'] != 'qemu' or not payload.get('credentials', {}).get('control_public_key'):
+                raise EngineError('Reinstall recovery needs the original unique management public key and exact stopped guest evidence.')
+            if instance_dir(spec['id']).with_name(spec['id'] + '.reinstall-backup').exists():
+                raise EngineError('Reinstall backup still exists; preparation/cleanup is not proven complete.')
+            value = _qemu_create(engine, payload['spec'])
+            expected = hashlib.sha256(payload['credentials']['control_public_key'].encode()).hexdigest()
+            if value['runtime'].get('control_key_sha256') != expected:
+                raise EngineError('The guest seed does not prove this reinstall’s unique key generation.')
+            return value
         if kind == 'create':
             return _qemu_create(engine, spec) if spec['engine'] == 'qemu' else _docker_create(engine, spec)
         if kind == 'resize' and spec['engine'] == 'qemu':

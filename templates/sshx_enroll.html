@@ -1,0 +1,21 @@
+{% extends 'base.html' %}{% from '_components.html' import icon,csrf %}
+{% block title %}Enroll SSHX · {{ vps.name }} · SKVM{% endblock %}
+{% block breadcrumb %}SSHX enrollment{% endblock %}
+{% block content %}
+<div class="page-intro"><div><a class="back-link" href="{{ url_for('vps.details',ident=vps.id) }}#sshx">{{ icon('arrow-left') }}{{ vps.name }}</a><h1>Enable managed access<span class="title-dot">.</span></h1><p>One-time enrollment for this existing VM. No reinstall, password reset, or removal of owner SSH keys.</p></div></div>
+<section class="card form-card enrollment-card"><div class="card-heading"><h3>Verify the guest first</h3>{{ icon('fingerprint') }}</div>
+{% if failure %}<div class="notice warning">{{ icon('triangle-alert') }}<span>{{ failure }}</span></div><a class="btn btn-secondary" href="{{ url_for('sshx.enroll',ident=vps.id) }}">{{ icon('refresh-cw') }}Retry guest fingerprint</a>{% endif %}
+{% if fingerprint and not failure %}
+<p class="muted">This fingerprint was read from the selected VM’s proven QEMU SSH forward before any credentials were sent. Independently compare it with the guest’s public host key through your existing trusted SSH connection. If repairing a changed host key, verify the change instead of accepting it blindly.</p>
+<div class="copy-code"><code id="guest-host-fingerprint">{{ fingerprint }}</code><button type="button" class="icon-btn" data-copy="guest-host-fingerprint" aria-label="Copy guest fingerprint">{{ icon('copy') }}</button></div>
+<p class="form-note">Inside the guest, compare <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256</code> (or the corresponding RSA/ECDSA host key).</p>
+<form method="post" class="form-stack" data-confirm="Add a unique management public key to this guest without changing its existing passwords or keys? Its private key will be encrypted on the panel.">{{ csrf() }}
+<input type="hidden" name="host_fingerprint" value="{{ fingerprint }}">
+<label class="check-field"><input type="checkbox" name="trust_host" value="1" required><span>I verified and accept this VM’s exact host fingerprint.</span></label>
+<label class="field">Existing guest authentication<select name="method" id="enroll-method"><option value="password">Guest password</option><option value="key">Guest private key</option></select><small>Guest account: <strong>{{ vps.username }}</strong>. This is not your panel login.</small></label>
+<label class="field" data-enroll-password>Existing guest password<input type="password" name="guest_password" autocomplete="off" maxlength="1024" required></label>
+<div data-enroll-key hidden><label class="field">Existing guest private key<textarea name="private_key" rows="6" maxlength="65536" spellcheck="false" autocomplete="off" disabled></textarea></label><label class="field">Key passphrase <span class="optional">if encrypted</span><input type="password" name="passphrase" autocomplete="off" maxlength="1024" disabled></label></div>
+<div class="notice compact">{{ icon('lock-keyhole') }}<span>Enrollment credentials are used in memory only and never saved or logged. Only the new, panel-generated management private key is encrypted and retained. Keep a separate native SSH recovery credential.</span></div>
+<button class="btn btn-primary">{{ icon('key-round') }}Enroll this VM</button></form>
+{% endif %}</section>
+{% endblock %}

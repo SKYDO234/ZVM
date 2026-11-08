@@ -26,7 +26,7 @@ def test_public_pages_are_valid_html_with_valid_form_targets(client,path):
     parsed(client.get(path))
 
 
-@pytest.mark.parametrize('path',['/dashboard','/vps','/vps/create','/vps/console','/webssh','/profile','/settings','/admin','/docs'])
+@pytest.mark.parametrize('path',['/dashboard','/vps','/vps/create','/user','/profile','/settings','/admin','/docs'])
 def test_authenticated_pages_are_valid_html(client,users,path):
     signin(client,'operator@example.test');root=parsed(client.get(path))
     if path=='/admin':
@@ -35,10 +35,10 @@ def test_authenticated_pages_are_valid_html(client,users,path):
         assert {i.get('name') for i in nodes[0].iter('input')}>={'name','url','token','csrf_token'}
 
 
-def test_instance_controls_console_and_job_render_valid_forms(client,users):
+def test_instance_controls_sshx_and_job_render_valid_forms(client,users):
     instance=fixture_vps(users[0]);signin(client,'operator@example.test')
-    parsed(client.get(f'/vps/{instance.id}'));parsed(client.get(f'/vps/{instance.id}/console'))
-    parsed(client.get(f'/webssh/{instance.id}'))
+    parsed(client.get(f'/vps/{instance.id}'))
+    parsed(client.get(f'/vps/{instance.id}/sshx/enroll'))
     job=Job(id=str(uuid.uuid4()),owner_id=users[0].id,instance_id=instance.id,kind='start',engine='qemu',status='failed')
     db.session.add(job);db.session.commit()
     parsed(client.get(f'/vps/jobs/{job.id}'))
@@ -46,7 +46,7 @@ def test_instance_controls_console_and_job_render_valid_forms(client,users):
 
 def test_create_without_enabled_images_has_a_clear_disabled_state(client,users):
     for image in db.session.scalars(db.select(OSImage)):image.enabled=False
-    db.session.commit();signin(client)
+    db.session.commit();signin(client,'operator@example.test')
     response=client.get('/vps/create')
     root=parsed(response)
     assert 'No operating system images are enabled' in response.get_data(as_text=True)

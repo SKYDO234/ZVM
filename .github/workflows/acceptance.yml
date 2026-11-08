@@ -45,7 +45,7 @@ jobs:
         run: |
           for binary in qemu-system-x86_64 qemu-img cloud-localds ssh ssh-keygen; do command -v "$binary"; done
           python scripts/qemu-smoke-test.py
-      - name: Boot the pinned cloud OS, authenticate, grow and check persistence
+      - name: Boot the pinned cloud OS, validate guest SSHX, grow and check persistence
         run: python -m pytest tests/test_qemu_os_boot.py -q -rs --junitxml="$RUNNER_TEMP/qemu-os-boot.xml"
       - uses: actions/upload-artifact@v7
         if: always()

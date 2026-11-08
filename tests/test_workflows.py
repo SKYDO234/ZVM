@@ -19,7 +19,7 @@ from tests.test_provisioning import spec
 def test_confirmation_is_one_time_and_does_not_create_fake_record(client,users,monkeypatch):
     monkeypatch.setattr('routes.vps.capacity_check',lambda *a,**kw:None)
     monkeypatch.setattr('services.provisioning.capacity_check',lambda *a,**kw:None)
-    signin(client)
+    signin(client,'operator@example.test')
     response=post(client,'/vps/create',{'name':'review-only','engine':'qemu','os_id':'ubuntu-24.04','ram_mb':512,'vcpus':1,
                    'disk_gb':8,'username':'ubuntu','auth_method':'password','guest_password':'Valid-guest-password!'},token_path='/vps/create')
     assert response.status_code==200 and b'Confirm & provision' in response.data

@@ -3,9 +3,9 @@ import hashlib
 import json
 import re
 import secrets
-from flask import Blueprint, abort, current_app, g, jsonify, request
+from flask import Blueprint, abort, current_app, jsonify, request
 from engines import EngineError, engine_for
-from extensions import db, sock
+from extensions import db
 from models import AgentInstance, AgentOperation, OSImage
 from services.resource_monitor import host_metrics
 from services.security import encrypt, integer, settings, ssh_key, valid_uuid
@@ -19,17 +19,8 @@ def authenticate():
     supplied = request.headers.get('Authorization', '')
     if not expected or not secrets.compare_digest(supplied.encode('utf-8'), f'Bearer {expected}'.encode('ascii')):
         abort(401)
-    if request.endpoint == 'node_api.webssh':
-        # This is a private machine relay, never a browser cookie endpoint.
-        if request.headers.get('Origin') is not None:
-            abort(403)
-        from services import webssh
-        instance = db.get_or_404(AgentInstance, request.view_args['ident'])
-        try:
-            webssh.validate_spec(instance.spec)
-            g.webssh_lease = webssh.admit(f'node:{instance.spec["owner_id"]}', instance.id)
-        except EngineError:
-            abort(409)
+    if request.headers.get('Origin') is not None:
+        abort(403)  # This machine API never accepts a browser origin.
 
 
 @node_api.get('/capabilities')
@@ -42,8 +33,8 @@ def capabilities():
             return 'unknown'
     return jsonify({'protocol_version': 1, 'host': host_metrics(), 'qemu': engine_for('qemu').capabilities(),
                     'docker': engine_for('docker').capabilities(),
-                    'webssh': {'protocol_version': 1, 'available': current_app.config['WEBSSH_ENABLED'] and not current_app.config['TEST_MODE'],
-                               'reason': 'Managed QEMU guests only; requires WebSocket proxy upgrades.'},
+                    'sshx': {'protocol_version': 1, 'available': current_app.config['SSHX_ENABLED'] and not current_app.config['TEST_MODE'],
+                             'max_seconds': current_app.config['SSHX_MAX_SECONDS']},
                     'instances': [{'id': i.id, 'engine': i.spec['engine'], 'status': state(i)} for i in instances],
                     'reserved_ports': [i.spec['ssh_port'] for i in instances if i.spec.get('ssh_port')],
                     'provisioning': db.session.scalar(db.select(db.func.count()).select_from(AgentOperation).where(AgentOperation.status.in_(['queued', 'running', 'uncertain']))),
@@ -71,6 +62,12 @@ def validate_agent_spec(raw, credentials):
         user = str(raw.get('username', ''))
         if not re.fullmatch(r'[a-z_][a-z0-9_-]{0,30}', user) or user in ('root', 'nobody', 'daemon', 'bin', 'sys'):
             raise EngineError('Invalid guest username.')
+        restricted = raw.get('network_restricted', s['restrict_guest_network'])
+        if type(restricted) is not bool:
+            raise EngineError('Guest network policy must be a boolean.')
+        spec['network_restricted'] = restricted
+        if credentials.get('control_public_key'):
+            credentials['control_public_key'] = ssh_key(credentials['control_public_key'])
         spec['username'] = user
         spec['ssh_port'] = integer(raw.get('ssh_port'), 'SSH port', s['ssh_port_min'], s['ssh_port_max'])
         if credentials.get('public_key'):
@@ -91,7 +88,7 @@ def operation_create():
         data = request.get_json() or {}
         ident = valid_uuid(data.get('id'))
         kind = data.get('kind')
-        if kind not in ('create', 'start', 'stop', 'force_stop', 'restart', 'delete', 'resize', 'reinstall'):
+        if kind not in ('create', 'start', 'stop', 'force_stop', 'restart', 'delete', 'resize', 'reinstall', 'network', 'assign'):
             raise EngineError('Unsupported node operation.')
         credentials = data.get('credentials', {})
         if kind in ('create', 'reinstall'):
@@ -138,66 +135,43 @@ def instance_status(ident):
     return jsonify(metric | {'id': instance.id, 'allocation': {k: instance.spec[k] for k in ('ram_mb', 'vcpus', 'disk_gb')}})
 
 
-@node_api.route('/instances/<ident>/console', methods=['GET', 'POST'])
-def console(ident):
-    instance = db.get_or_404(AgentInstance, ident)
-    engine = engine_for(instance.spec['engine'])
+@node_api.post('/instances/<ident>/sshx')
+def guest_ssh(ident):
+    from engines import UncertainError
+    from services.guest_access import GuestGuard, target
+    from services.guest_ssh import admission
+    from services.security import locked
+    from services import sshx
+    data = {}
     try:
-        if request.method == 'POST':
-            payload = request.get_json(silent=True) or {}
-            if not isinstance(payload, dict):
-                raise EngineError('Console requests must be JSON objects.')
-            return jsonify(engine.console_input(instance.spec, payload.get('input', '')))
-        return jsonify(output=engine.console(instance.spec))
-    except EngineError as exc:
-        return jsonify(error=str(exc)), 409
-
-
-@node_api.teardown_request
-def release_webssh(_exc):
-    from sqlalchemy.exc import SQLAlchemyError
-    from services.webssh import release
-    lease = g.pop('webssh_lease', None)
-    if lease:
-        try:
-            release(lease)
-        except SQLAlchemyError:
-            db.session.rollback()
-
-
-@sock.route('/instances/<ident>/webssh', bp=node_api)
-def webssh(ws, ident):
-    from simple_websocket import ConnectionClosed
-    from services import webssh as ssh
-    from services.node_webssh import target
-    from services.webssh_access import AccessGuard
-    from services.webssh_socket import BoundedSocket
-    ws = BoundedSocket(ws)
-    first = {}
-    try:
-        raw = ws.receive(timeout=8)
-        if raw is None:
-            raise ssh.SSHError('connect_timeout', 'WebSSH setup timed out.')
-        data = ssh.message(raw)
-        raw = None
-        instance = db.get_or_404(AgentInstance, ident)
-        spec = dict(instance.spec)
-        if data.pop('target', None) != target(spec):
-            raise ssh.SSHError('target_changed', 'External SSH configuration or allocations differ from the panel record. Reconcile before connecting.')
-        first = ssh.connection_message(data)
-        data.clear()
-        authority = AccessGuard(g.webssh_lease, spec, agent=True)
-        def guard():
-            ws.ensure_open()
-            authority()
-        ssh.stream(ws, spec, first, guard)
-    except ConnectionClosed:
-        pass
-    except EngineError as exc:
-        ssh.error(ws, exc)
-    except (ValueError, TypeError, KeyError):
-        ssh.error(ws, ssh.SSHError('invalid_message', 'Invalid WebSSH node message.'))
+        valid_uuid(ident)
+        data = request.get_json() or {}
+        if not isinstance(data, dict):
+            raise EngineError('Guest SSH requests must be JSON objects.')
+        mode = data.get('mode')
+        fields = {'probe': {'host_fingerprint'}, 'verify': {'private', 'host_fingerprint'}, 'enroll': {'auth', 'public_key', 'host_fingerprint'},
+                  'generate': {'private', 'host_fingerprint', 'operation_id', 'seconds'},
+                  'stop': {'private', 'host_fingerprint', 'operation_id', 'seconds'},
+                  'inspect': {'private', 'host_fingerprint', 'operation_id', 'seconds'},
+                  'inspect_stop': {'private', 'host_fingerprint', 'operation_id', 'seconds'}}
+        if mode not in fields or set(data) - ({'mode', 'target'} | fields[mode]):
+            raise EngineError('Only fixed, managed guest SSH actions are allowed.')
+        with locked(f'control-{ident}', blocking=False):
+            instance = db.get_or_404(AgentInstance, ident)
+            spec = dict(instance.spec)
+            if data.get('target') != target(spec):
+                raise EngineError('External guest identity or allocations differ from the panel. Reconcile before connecting.')
+            with admission(f'node:{spec["owner_id"]}', ident):
+                guard = GuestGuard(spec, agent=True)
+                kwargs = {k: v for k, v in data.items() if k not in ('mode', 'target')}
+                value = sshx.local(spec, mode, check=guard, **kwargs)
+                return jsonify(sshx.result(value, mode))
+    except UncertainError:
+        return jsonify(error='Guest operation outcome is uncertain. Inspect before retrying.'), 503
+    except (EngineError, BlockingIOError, TypeError, AttributeError, KeyError):
+        return jsonify(error='Guest operation rejected. Check the managed target, guest readiness, credentials and network policy.'), 409
     finally:
-        ws.finish()
-        first.get('credentials', {}).clear()
-        first.clear()
+        if isinstance(data, dict):
+            if isinstance(data.get('auth'), dict):
+                data['auth'].clear()
+            data.clear()

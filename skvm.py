@@ -17,7 +17,7 @@ import secrets
 from flask import Flask, jsonify, render_template, request
 from flask_wtf.csrf import CSRFError
 from config import configuration
-from extensions import csrf, db, login, sock
+from extensions import csrf, db, login
 from models import Job, User
 
 
@@ -25,6 +25,8 @@ def create_app(overrides=None):
     app = Flask(__name__, instance_relative_config=False)
     app.config.update(configuration())
     app.config.update(overrides or {})
+    if type(app.config['SSHX_MAX_SECONDS']) is not int or not 60 <= app.config['SSHX_MAX_SECONDS'] <= 3600:
+        raise RuntimeError('SSHX_MAX_SECONDS must be 60–3600 seconds.')
     if any(c in str(app.config['DATA_DIR']) for c in (',', '\n', '\r', '\x00')):
         raise RuntimeError('SKVM_DATA_DIR cannot contain QEMU option separators or control characters.')
     for folder in ('vms', 'images', 'logs', 'locks'):
@@ -32,7 +34,6 @@ def create_app(overrides=None):
     db.init_app(app)
     login.init_app(app)
     csrf.init_app(app)
-    sock.init_app(app)
     login.session_protection = 'strong'
 
     @login.user_loader
@@ -78,8 +79,8 @@ def create_app(overrides=None):
         app.register_blueprint(node_api)
         csrf.exempt(node_api)  # Bearer-authenticated machine API; never accepts browser cookie authentication.
     else:
-        from routes import admin, api, auth, dashboard, vps, webssh
-        for module in (auth, dashboard, vps, admin, api, webssh):
+        from routes import admin, api, auth, dashboard, vps, sshx
+        for module in (auth, dashboard, vps, admin, api, sshx):
             app.register_blueprint(module.bp)
 
     @app.context_processor

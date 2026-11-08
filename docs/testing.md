@@ -1,215 +1,130 @@
-# Test execution and compatibility report
+# Validation and compatibility boundaries
 
-## WebSSH integration validation
+## Current SSHX / role-separation revision
 
-The uploaded `webssh.html` is preserved unchanged in `docs/reference/webssh.html`; the deployed panel adapts its terminal layout/controls with local xterm assets and a real authenticated SSH/WebSocket backend rather than mounting its nonexistent polling/PIN APIs or random latency.
+Console/WebSSH and the WebSocket/xterm implementation have been removed. Their unchanged uploaded design remains a reference, not deployed code. The current feature is **Generate SSHX inside the selected QEMU VM**, encrypted management keys and output links, admin-only creation/assignment, and the separate `/user` workspace. [Usage and trust boundaries](sshx.md).
 
-Current local results (2026-11-06): **290 backend tests passed, 4 native tests skipped**, **16 desktop/Pixel 7-emulation browser journeys passed**. The full local backend run took **157.53 seconds** with **76%** measured Python coverage (3,954 statements); the final browser run completed in **1.3 minutes**. The one warning remains Passlib/Python 3.11 `crypt` deprecation. Equipped CI results are recorded separately when available.
+### Executed locally
 
-New coverage includes actual SSH key exchange/password/encrypted Ed25519-RSA-ECDSA authentication, explicit first/changed fingerprints before guest authentication, PTY/resize/control/Unicode I/O, real measured transport probes, owner/admin/Origin/CSRF enforcement, revoked/disabled/suspended/deleted access, ephemeral credential handling, bounded key-decryption work, bounded pending input during a stalled guest authentication, complete serialized frame writes, five-second stalled-write/close deadlines on actual TCP and TLS sockets, audit-database failure cleanup, delayed dashboard-cookie refresh regression, cross-worker limits and actual **two-worker Gunicorn** HTTP/WebSocket handling. A real TLS node relay checks CA/hostname/bearer/Origin/target mismatch, redirect refusal, input/resize/output and node disablement; a failed remote relay never connects to panel localhost.
-
-**Boundary:** protocol/browser tests use a disposable real SSH echo/PTY server and explicitly replace QEMU endpoint discovery. The separate SSH browser server uses a temporary database with named synthetic protocol-fixture records; those are not production guests or native-OS evidence. All original UI journeys still run against the separate empty, provisioning-disabled database. No production account/data was changed.
-
-The existing opt-in Ubuntu/QEMU acceptance test now also verifies **unmocked QEMU listener selection → actual guest SSH → panel WebSocket**, independently compared host fingerprints, `id -un`, `stty` PTY resizing and explicit changed-key acceptance after a real reinstall. It is not claimed as a local pass: this sandbox lacks QEMU. The equipped CI result below is separate from those local skips. [WebSSH usage/security/limits](webssh.md).
-
-
-### Equipped WebSSH acceptance
-
-[Run 42261471676](https://github.com/SKYDO234/ZVM/actions/runs/42261471676), source **`724da965acc609a45f06da44589b6297aea93ff1`**, completed **all six jobs successfully** on 2026-11-06. Both Python versions passed **278 tests / 4 native skips**; browser, actual Docker/TLS and disposable root-installer/blank-disk QEMU jobs passed. All **nine vendor HTTPS QCOW2 endpoints** verified. The real Ubuntu 24.04 / TCG / cloud-init / queued lifecycle test passed **1 case, 0 failures, 0 skips**, including the newly added panel WebSocket SSH identity/PTY checks, independent host-key comparison and changed-key confirmation after reinstall. Its check completed at **17:49:55 UTC**.
-
-The output-deadline, audit-cleanup and stable-browser-binding hardening adds the twelve local tests included in the **290-pass** result above. Its own [run 42267160625](https://github.com/SKYDO234/ZVM/actions/runs/42267160625), source **`9be7beefb60f5f720e37b003384a0443a2f36d30`**, also completed **all six jobs successfully**: **290 passed / 4 native skips** on Python 3.11 and 3.12, browser, installer/QEMU, Docker/TLS and real Ubuntu WebSSH/lifecycle. The Ubuntu check again reported **1 case, 0 failures, 0 skips**, completing at **18:18:06 UTC**. Actual socketpair tests exercise non-reading **TCP and verified TLS** peers for send, close and node-relay writes, plus full non-interleaved writes and idle-read behavior. An intermittent browser upgrade 403 exposed by concurrent testing was traced to delayed dashboard responses overwriting a newly added session field; WebSSH now reuses the existing session CSRF seed instead, with deterministic stale-cookie regression coverage and a successful full browser rerun. Existing rolling-update terminal bindings remain recognized.
-
-
-A final UI-only follow-up clears xterm's queued screen-reader/live-region announcements along with the visible terminal, without sending a guest command or resetting guest shell state. Strengthened frame-level assertions pass in the complete **16-journey** browser suite and **12 repeated WebSSH journeys** (two repetitions, desktop and Pixel 7, **25.5 seconds**). Larger repetitions against one shared fixture exceed the unchanged 15-attempt per-IP login budget; use fresh fixture runs, not disabled authentication limits. That UI follow-up has its own source CI; it does not alter the Python/native source certified by the two runs above.
-
-The real local production-mode panel also starts on **0.0.0.0:31120** with Secure/HttpOnly cookies. All **nine authenticated routes** and metrics remain accessible before replacing the initial password, with an honest empty WebSSH state, bundled assets, a single first-run account, zero fabricated guests and 0600 database/session-key permissions. No existing account/password was reset.
-
-## Navigation-loop regression fix
-
-The previous initial-password guard caused the reported one-page symptom: every authenticated navigation route returned `302 /profile` and `/api/metrics` / `/api/activity` returned `403 password_change_required`. The new behavior opens Overview after login (or the validated local `next` destination), removes that global redirect/API lock, and keeps a persistent password-change reminder instead. The existing rotation flag remains in SQLite as a reminder flag, so existing accounts, sessions, passwords, data and schema are preserved.
-
-Validation of the fix:
-
-- **205 backend tests passed, 4 native tests skipped, 1 warning, 63.08 seconds** locally; **72%** measured Python coverage (3,068 statements), bootstrap service 100% statement coverage.
-- **10 Chromium desktop/Pixel 7 emulation journeys passed**. The default-admin regression now physically clicks all eight sidebar destinations before changing the password, checks each navigation response is 200, verifies metrics/recent-activity APIs, opens/closes the activity drawer, creates a plan through the real admin form, follows the password reminder, changes the password and verifies old-session rejection/reminder removal.
-- Backend regression covers existing reminder-flag accounts, safe post-login redirects, all authenticated pages/APIs, actual form validation/persistence, saving a profile without a password change, session revocation, retained CSRF and administrator role checks, and password replacement/restart persistence.
-- No VM was fabricated. Native guest tests still require an equipped host. The earlier full-native baseline below does **not** by itself validate this policy/UI change; fresh CI is run for the updated source.
-
-The disposable HTTP bootstrap acceptance script **passed against real Gunicorn on 0.0.0.0:31120**, including duplicate-start handling, all eight routes/APIs/admin form before password replacement, password replacement, revoked sessions, server restart, preserved new password and graceful stop. It no longer asserts that every page is locked. No production account was changed; this used a separate temporary database.
-
-## Previous full-source baseline (before the navigation fix)
-
-Date: **2026-11-06**. Validated application source: **`aa1a15a2399d38200e1370e0bfd93eeaa9df74db`** on `arena/364e5d5e-zvm`. Documentation-only follow-ups do not change that application source.
-
-### Baseline results
-
-| Check | Result and scope |
+| Check | Result and actual scope |
 |---|---|
-| Local backend/security/regressions | **196 passed, 4 skipped, 1 warning in 56.15 s**, including 30 new bootstrap/installer/launcher cases |
-| Local measured Python coverage | **72%** (3,082 statements); bootstrap service 100% statement coverage, not exhaustive compatibility proof |
-| Local Chromium desktop + Pixel 7 emulation | **10 passed in 54.8 s** |
-| Remote Python 3.11 and 3.12 | **196 passed, 4 native skips on each version**; 200 JUnit cases, no failures/errors |
-| Actual Ubuntu 24.04 / TCG / cloud-init / SSH | **1 passed, 0 skipped** on current source, including the full queued panel/SSH/lifecycle workflow |
-| Actual Docker and panel → TLS agent → Docker | **2 passed, 0 skipped**, current source |
-| All nine live image endpoints | **9 verified HTTPS QCOW2 endpoints**, including the Fedora archive and Debian redirects |
-| Actual root installer + fresh Node LTS + HTTP panel + blank-disk QEMU | **Passed**; system packages, SHA-256-verified Node 24, pip/npm/assets, schema/bootstrap, real Gunicorn 31120, password rotation/session invalidation/restart, native smoke/integration |
-| Full local installer repeat | **Passed**; existing configuration, account, rotated hash and flag preserved |
+| Full Python backend/security/regression suite | **317 passed, 4 skipped, 1 warning in 76.78 s**, Python 3.11; the passlib `crypt` deprecation is shown, not hidden |
+| Chromium desktop + Pixel 7 emulation | **16 passed in 1.4 minutes**; both ordinary panel flows and SSHX protocol-fixture flows |
+| Focused guest/SSH/node/process safety run | **90 passed in 27.86 s** before the additional enrollment/recovery cases incorporated in the full suite |
+| Locked npm install / asset build | Passed; **0 npm vulnerabilities**; only the existing Browserslist age notice |
+| Ruff undefined/unused-name checks | Passed; rerun with `ruff check --select F .` |
+| Guest shell syntax | All four fixed-script modes parsed with `sh -n`, **without executing their contents on the host** |
+| Production preview after final-source restart | Actual Chromium login, eight authenticated pages, non-blocking reminder, removed terminal routes returning 404, desktop and 412 px mobile without overflow or JavaScript errors; existing accounts/data preserved |
 
-**Baseline CI: COMPLETED SUCCESSFULLY — all six jobs green.** [SKVM full checks, run 42209561597](https://github.com/SKYDO234/ZVM/actions/runs/42209561597), application commit `aa1a15a2399d38200e1370e0bfd93eeaa9df74db`. This run covers the new default-admin/root-installer/port changes, not only the earlier engine baseline. The actual installer/HTTP step ran **11:20:55–11:30:15 UTC**; native smoke/integration also passed. The full Ubuntu job completed successfully in **13 min 50 s**. Documentation-only follow-ups use `[skip ci]` rather than repeating unchanged application/native tests.
+The four native skips are two opt-in Docker cases, missing local QEMU tools, and the opt-in pinned full-OS boot. **These are not four compatibility passes.** This sandbox has no usable QEMU guest or Docker daemon, and its outbound network cannot reach the OS/SSHX distribution hosts. It never installs SSHX on the panel host or inserts a fake production guest/link.
 
-## Default-admin and root-installer update
+### What these checks prove
 
-The prior bootstrap update added a reserved username `admin` with first-run password `admin123`, a persistent one-time bootstrap marker, additive schema migration, mandatory password rotation, port **31120**, and the root `install.sh` (Node/Python/system prerequisites, asset build, initialization and real Gunicorn hosting). Existing accounts and secrets are preserved. Tests and agents never acquire an unintended default account.
+- Hashed passwords, CSRF, session invalidation, role-aware landing pages and the non-blocking initial-password reminder remain connected.
+- User creation/review/confirmation is denied on the backend, not merely hidden. Admin requests reserve and enforce the **enabled assignee's plan**, including pending incoming assignments; admin and quota owner are separate.
+- Users see only their own assigned instances and guest allocations, not host-wide metrics. They retain owner power, grow-only disk resize, reinstall and deletion.
+- Unique management keys are encrypted before queueing and applied only after the runtime proves their public-key generation. Existing-guest enrollment confirms a host key, appends a public key, verifies its actual authentication, and preserves the previous durable key on failed verification/storage transactions.
+- Link parsing rejects untrusted origins, malformed fragments, control characters and ambiguous output. Capability URLs/private keys remain encrypted, owner/admin-only, excluded from audit messages, no-store and no-referrer.
+- Fresh authority checks reject disablement, reassignment and stale sessions. Shared admission leases impose global/principal/rate bounds across workers.
+- Endpoint proof requires the exact managed QEMU process/UUID/disk/network/listener/QMP state and loopback tuple. Negative runtime tests explicitly replace the process boundary and assert no dial.
+- Real SSH protocol fixtures exercise key exchange, host pinning, password/encrypted-key parsing, authentication, fixed `sh -s` execution and deadlines. **No fixture executes a shell, OS command, installer or real SSHX client.** It records stdin and returns clearly synthetic output.
+- A real local CA/hostname-verified HTTPS/bearer agent fixture forwards those fixed SSH operations. It rejects browser Origins, arbitrary targets/commands, identity mismatch, changed host pins and old node capabilities; private output is not put in agent operation/manifests.
+- Process-control tests simulate `/proc`, pidfds and signals with wholly fake OS modules. They cover PID reuse before/after proof, an unrelated process, another VM's client, orphan SSHX, inspection-only behavior, unavailable/denied pidfds and stop timeout. They never signal a host process.
+- Reconciliation uses observational evidence, not installer replay. Reinstall recovery requires the pending unique seed-key hash and no incomplete backup. A mismatched engine state cannot falsely retire an access link.
 
-New regression checks cover empty/existing/deleted-account bootstrap, hash storage, schema migration/data preservation, opt-out, environment isolation, HTML username/mandatory-password fields, all panel/API/guest-mutation gates, failed password changes, admin unlock, session invalidation, safe PID handling and installer argument rejection. Desktop/mobile browser coverage adds the complete initial-password flow.
+### Browser fixtures versus native acceptance
 
-The installer CI explicitly downloads the official Node 24 LTS archive and verifies its SHA-256, builds assets, starts the real panel on 31120 twice to check idempotence, performs actual HTTP default-login/rotation/session checks against a disposable database, restarts Gunicorn to verify the password is not reset, and then runs the native blank-disk QEMU checks. `scripts/check-bootstrap.py` refuses the production database or a run without the explicit disposable-acceptance opt-in.
+`tests/ui_server.py` uses its own temporary DB and test-mode provisioning refusal on port 5558. `tests/sshx_ui_server.py` uses another DB and real SSH fixture on 5559; only its QEMU discovery/metrics boundaries are explicitly replaced. Its marked synthetic links never represent a live relay. Browser coverage includes fingerprint/credential-field enrollment, actual new-key SSH authentication, Generate/poll/Details/copy/stop, safe external-link attributes and foreign-owner denial.
 
-Local validation of this update:
+These test-only programs are not application demo/fallback modes and are never the production preview. Android is browser emulation, not physical-device certification.
 
-| Check | Result |
-|---|---|
-| Backend/security/regressions, including 30 new cases | **196 passed, 4 native skips, 1 warning in 56.15 s** |
-| Measured Python coverage | **72%**, 3,082 statements; `services/bootstrap.py` 100% statement coverage |
-| Chromium desktop + Pixel 7 emulation | **10 passed in 54.8 s** |
-| Root installer with existing Python/Node (`--skip-system --no-start`) | Passed; actual pip/npm install, asset build, schema and one-time hashed administrator |
-| Full repeat of that installer | Passed; existing configuration/account/rotated hash/rotation flag preserved |
-| Real Gunicorn / HTTP on 0.0.0.0:31120 | Passed; duplicate-start refusal, mandatory rotation, blocked APIs/guest mutation, admin unlock, revoked old sessions, restart preserves the new password, graceful stop |
-| Ruff / JS syntax / Bash syntax / original-reference hash | Passed |
-
-The four local native skips are honest: this sandbox still has no QEMU tools or Docker daemon. Fresh distro-package/Node-download/native-resource checks **passed separately on equipped CI**, as shown above. A native CI pass does not pretend that these engines are available inside the supplied sandbox.
-
-## What the automated checks exercise
-
-### Backend, security and persistence
+## Reproducing routine checks
 
 ```bash
-python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m compileall -q engines models routes services skvm.py node_agent.py
+.venv/bin/python -m ruff check --select F .
 .venv/bin/python -m pytest -q -rs
-.venv/bin/python -m pytest --cov=engines --cov=services --cov=routes --cov=models --cov=skvm --cov-report=term-missing -q
-```
-
-Temporary databases/directories are used, never `database/skvm.db`. Unit tests explicitly mock engine/transport boundaries where real host resources are not intended. Native resource tests are separately identified below.
-
-Coverage includes:
-
-- Registration/login/logout, salted password hashing, safe redirects, CSRF and role/ownership checks on details, metrics, console and every action.
-- Password/profile changes, session revocation, account disablement, numeric-user-ID reuse, guarded deletion, retained audits, and purpose-separated login/registration throttles.
-- Admin users, roles, plans, quotas, persistent settings, image configuration and node registration/token handling.
-- Strict HTML5 parsing of public/authenticated/admin/instance/job forms, including correct node-form actions and CSRF fields.
-- Creation review, encrypted expiring confirmation, duplicate-confirmation rejection, no premature VPS row, conservative capacity/quotas and uncertain-operation reservations.
-- Cgroup v1/v2 membership/mount/ancestor accounting, sibling pressure, CPU quotas/affinity, private-path/SSRF protection and fail-closed unknown capacity.
-- Controlled QEMU arguments, full-copy disk provisioning, independent allocations/seeds, initial paused QMP launch/resume, exact process identity, duplicate start/PID reuse, no automatic graceful-to-force escalation, disk growth and recovery proof.
-- Docker SDK signatures and explicit client closure using a genuine SDK client at a mocked network boundary; resource/security options, network cleanup, measured CPU history and exact-container writable-layer telemetry.
-- Allowlisted HTTPS redirects, HTTP cleanup, raw stream timeout classification/deadlines, cached-image SHA256 revalidation, symlink rejection and partial-file cleanup.
-- Real background-thread startup, idempotency, shutdown drain/restart, and refusal of mutations in test mode.
-- Versioned node schemas, capacity/identity validation, token redaction, durable/idempotent operations and metadata-only reconciliation without replaying mutations.
-
-The one local warning is Passlib's use of Python 3.11's deprecated `crypt` interface. It is not a failed test. Python versions actually checked remotely are 3.11 and 3.12.
-
-### Browser checks
-
-```bash
 npm ci
 npm run build:assets
 npx playwright install --with-deps chromium
 npm run test:ui
 ```
 
-Five journeys execute on both **1440 × 960 desktop Chromium** and **Pixel 7 Chromium emulation**:
+CI uses its installed Playwright Chromium. Where an equipped local Chromium is already available, `SKVM_BROWSER_EXECUTABLE_PATH` is a test-only executable override; it does not change guest engine selection.
 
-1. Responsive landing, registration, actual empty dashboard/activity/chart samples and mobile navigation.
-2. Connected authenticated pages, live allocation form summary, Docker/QEMU field switching, honest test-mode provisioning refusal and ordinary-user admin denial.
-3. Admin node-form submission/rejection, plan creation/assignment, user disablement/login denial/re-enable, image checksum configuration, resource policy persistence, guarded deletion cancel/confirm and metrics authorization.
-4. Profile/password replacement, rejection of an old session, session revocation, confirmation dialog, mobile-menu logout and unauthenticated API rejection.
-5. Initial administrator username/password login, actual clicks through every sidebar route, working APIs/activity drawer/admin form before password replacement, persistent reminder, optional password replacement and invalidation of another session.
+## Equipped-host acceptance
 
-There are no seeded historical chart points or guests and no browser JavaScript exceptions. The test server uses **port 5558**, its own temporary database, private randomly generated fixture credentials plus explicit temporary first-login fixtures and **real provisioning disabled**. These are browser/UI results, not native resource tests or physical-device certification.
+### Real Ubuntu / QEMU / SSHX
 
-The sandbox could not reach Playwright's normal browser-download host, so its local Chromium executable was extracted from an allowed npm package outside the repository. CI uses the ordinary Playwright installer. No browser binaries or credential artifacts are committed.
+**Passed on an equipped runner:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source `2c874d858a561d0ab2a2ec15b32a90f55099b399`, completed all six jobs successfully. Its full-OS check reported **1 case, 0 failures/errors, 0 skipped**, including actual guest SSHX installation, captured-link display, stop proof and reinstall/orphan checks. This is current SSHX evidence, not historical WebSSH evidence. Later documentation-only commits do not change the tested application/test source.
 
-### Actual TLS/authentication
-
-`tests/test_node_tls.py` uses generated temporary CA/server certificates, the actual `NodeEngine`, and a real HTTPS agent. It verifies untrusted CA, wrong hostname and wrong bearer rejection, and a valid authenticated capabilities response. Only the TCP destination is routed to an ephemeral loopback port; TLS, hostname checks, HTTP, token checking and JSON are genuine.
-
-The native Docker suite additionally provisions a **real guest through this TLS agent**, using separate panel/agent databases and actual worker threads. This is an isolated loopback integration, **not** a claim that an internet-facing node/reverse proxy was deployed.
-
-## Equipped-host resource acceptance
-
-`.github/workflows/tests.yml` executes these checks on disposable Ubuntu Linux runners. Native tests use unique UUIDs, isolated databases and owned-resource cleanup. They do not seed success rows, prune unrelated resources, start a Docker daemon, require KVM or use privileged guest containers.
-
-### Installer and blank-disk QEMU
-
-The `qemu-userspace` CI job executes **the root `install.sh --no-start`**, including a fresh checksum-verified Node runtime and actual HTTP server/password-rotation/restart checks, then `scripts/qemu-smoke-test.py` and `tests/test_qemu_integration.py` with the installed virtual environment. Package network retries/timeouts are bounded. The installer fails clearly on required installation errors; `--skip-system` is an explicit existing-runtime/panel-only choice. Native smoke/integration steps fail if real tools are missing.
-
-The integration verifies actual standalone QCOW2 creation, CIDATA seed, TCG process/QMP state, duplicate start rejection, explicit force stop, stopped disk growth and owned deletion. A running blank disk is **not** called an OS boot.
-
-### Ubuntu 24.04 cloud-init/SSH and lifecycle
-
-Install QEMU, qemu-img, cloud-localds, OpenSSH and **a trusted distribution Ubuntu cloud-image keyring**, then:
+To reproduce, install native QEMU/cloud-init/OpenSSH tools on a disposable Linux host; do not require KVM or a privileged guest container. Obtain the image checksum using the distribution-provided Ubuntu cloud-image GPG keyring:
 
 ```bash
 .venv/bin/python scripts/qemu-smoke-test.py
 export SKVM_BOOT_IMAGE_SHA256="$(.venv/bin/python scripts/verified-ubuntu-checksum.py)"
-SKVM_RUN_OS_BOOT=1 .venv/bin/python -m pytest tests/test_qemu_os_boot.py -q -rs
+SKVM_RUN_OS_BOOT=1 SKVM_USE_KVM=0 .venv/bin/python -m pytest tests/test_qemu_os_boot.py -q -rs
 ```
 
-`verified-ubuntu-checksum.py` verifies the HTTPS vendor manifest's GPG signature against the **distribution-provided keyring**, not a key fetched alongside that manifest. It accepts exactly one checksum for the selected image. A changed image/pin mismatch fails; TLS or signature checks are never bypassed.
+The checksum script validates the vendor HTTPS manifest signature against the **distribution** keyring, not a key fetched beside that manifest. No TLS/signature bypass or unpinned image fallback is used.
 
-`tests/test_qemu_os_boot.py` executes real Flask login/create/review/one-use confirmation routes, the durable queue and an **actual background consumer**, followed by:
+`test_qemu_os_boot.py` exercises real Flask login/create/review/one-use confirmation, durable jobs and an **actual queue consumer**:
 
-- Real independent 10 GiB QCOW2 and CIDATA creation, native image integrity and recovery checks.
-- **TCG explicitly**, 768 MiB RAM / 1 vCPU; real QMP running state followed separately by actual SSH readiness.
-- Key-authenticated configured user, Ubuntu 24.04 identity, guest-visible RAM/vCPU, `cloud-init status --wait` completion with no errors.
-- Guest data write, actual ACPI stop/admin suspension, start denial while suspended and unsuspension.
-- Stopped growth to 11 GiB, guest-visible **11 × 2³⁰-byte block device** and persisted data after reboot.
-- Graceful stop, same-guest reinstall, new first boot/key authentication, absence of the old data, explicit force stop, disk/row deletion.
+- Independent 10 GiB QCOW2/CIDATA, **TCG**, 768 MiB / 1 vCPU, real QMP then separately verified guest SSH/cloud-init readiness.
+- Explicit per-VM outbound internet acknowledgment; actual `curl -sSf https://sshx.io/get | sh` and `sshx` execute **inside that VM only**.
+- The actual CLI link is encrypted, shown on Details and never written into test logs/reports. Independently collected guest host fingerprints match the management connection.
+- Stop SSHX must preserve an unrelated guest sleep even with a corrupted PID record. After reinstall it also tests an orphaned SSHX client after timeout/PID loss.
+- Guest-visible OS/RAM/CPU/disk, data persistence through stop/start/growth to 11 GiB, admin suspension, same-guest reinstall, fresh management key, force stop and deletion.
 
-A repeated run exposed Ubuntu's final shutdown service occasionally exceeding 25 seconds under TCG. The engine now waits **up to 180 seconds**, never automatically force-kills, and still reports failure if the process remains. This fix is not hidden by weakening the native test.
+ACPI shutdown can require up to 180 seconds under TCG; tests do not silently force-kill an unresponsive guest. Optional `SKVM_BOOT_REPORT_DIR` stores bounded phase/result JSON and boot-error tails, never disks/private keys/access links. Native acceptance can take many minutes.
 
-Optional `SKVM_BOOT_REPORT_DIR` records phase/allocation/checksum/result JSON and bounded failure log tails. Private keys and disks are never uploaded. Native tests can take many minutes under TCG.
+### Docker and TLS-agent lifecycle
 
-### Docker and TLS-agent provisioning
-
-Use an already-accessible **local Unix** daemon with actual memory/CPU controls:
+Use an already accessible **local Unix** daemon with working memory/CPU controls:
 
 ```bash
-# Set your actual Unix socket if needed; never a remote TCP/SSH daemon URL.
-# export DOCKER_HOST=unix:///run/user/1000/docker.sock
 SKVM_RUN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest tests/test_docker_integration.py -q -rs
 ```
 
-The first case verifies real panel confirmation/queued creation, **128 MiB / 1 CPU**, in-container memory/CPU/**128-PID** enforcement, UID 1000, no privilege/host mounts/ports, internal network, actual process/writable-layer telemetry, data persistence through stop/start/restart, force stop and owned deletion.
+Tests check real queued panel creation, 128 MiB / 1 CPU / 128 PID limits, UID 1000, no privileges/host mounts/public ports, owned internal network, actual telemetry and persistent data through lifecycle/deletion. The second case goes through a real TLS/bearer agent and both queue consumers. Direct test-only SDK diagnostics are not a public Console API.
 
-The second registers the actual TLS/bearer-authenticated agent through the admin route, provisions through **both real queue consumers**, verifies panel/agent records and actual inventory/diagnostics, and stops/deletes the container through the authenticated protocol.
+Container disk allocation remains **budget-only** unless a separately verified supported storage driver enforces it. Docker is not a full VM or an SSHX guest.
 
-The requested **1 GiB disk is explicitly budget-only** unless a supported driver has separately been configured and verified for rootfs quota enforcement. These tests do not certify universal Docker storage quotas or container-to-VM equivalence.
+### Installer and image catalog
 
-### Image catalog verification
+The equipped CI workflow runs the actual root installer, fresh verified Node 24 LTS, pip/npm/build/schema setup and real Gunicorn port-31120 default-login/navigation/password/session/restart checks using a disposable DB. The installer is **not** executed on the live development data. It also runs native blank-disk QEMU smoke/integration.
 
 ```bash
 .venv/bin/python scripts/check-image-catalog.py --report test-results/image-catalog.json --strict
 ```
 
-All nine URLs are range-read from a disposable database and checked for QCOW2 magic. Fedora 40 uses the corrected `Fedora-Cloud-Base-Generic.x86_64-40-1.14.qcow2` archive filename. Debian's official HTTPS redirects require explicit `cdimage.debian.org` and the observed `gemmei`, `laotzu`, and `chuangtzu.ftp.acc.umu.se` mirror allowlist entries. Each redirect still undergoes HTTPS/host/public-DNS validation. No wildcard or TLS fallback was added.
+All nine retained catalog URLs are range-read and checked for QCOW2 magic. URL/redirect validation remains HTTPS/public-host allowlisted. Endpoint verification is **not** a full boot or support-lifecycle guarantee. Fedora 40 and Debian 11 retain their EOL warnings; only the named Ubuntu full-OS test establishes a boot result.
 
-**Endpoint verification is not an OS boot, support-lifecycle guarantee or publisher-signature check.** Debian 11 and Fedora 40 keep their warnings. All nine were verified remotely; the supplied sandbox itself still cannot reach vendor hosts.
+### CI evidence and history
 
-### CI evidence
+The push/PR `tests.yml` workflow covers Python 3.11/3.12, browser, actual installer/blank QEMU, pinned full-OS SSHX and Docker/TLS-agent acceptance. `acceptance.yml` also supports manually selected equipped tests. Missing tools/checksum/daemon fail opted-in acceptance rather than producing a skipped success. Artifacts expire after seven days and exclude keys/disks/access links.
 
-The push/PR workflow covers Python 3.11/3.12, browser, actual installer/blank QEMU, signed-checksum full-OS panel acceptance, and Docker/TLS-agent panel acceptance. `scripts/report-ci.py` publishes bounded JUnit/catalog details through GitHub check annotations in addition to artifacts; failures retain root causes even when log-storage downloads are blocked. Artifacts expire after seven days and exclude keys/disks.
+**Current acceptance:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source **`2c874d858a561d0ab2a2ec15b32a90f55099b399`**, concluded **success** on all six jobs:
 
-`.github/workflows/acceptance.yml` also provides manually dispatched `qemu`, `docker` or `both` targets. Publish the workflow on your default branch before using its manual Actions control. For manual QEMU runs, supply the trusted current image checksum; missing tools, pin or daemon are failures, not skipped acceptance successes.
+| Equipped CI job | Result |
+|---|---|
+| Backend Python 3.11 | 321 cases, 0 failures/errors, 4 native skips: **317 passed** |
+| Backend Python 3.12 | 321 cases, 0 failures/errors, 4 native skips: **317 passed** |
+| Browser | **16 passed**, desktop and Android emulation; SSHX sessions remain explicitly synthetic in this job |
+| Actual installer / userspace QEMU | Passed complete installer, fresh verified Node, port-31120 production checks and native blank-disk QEMU tests |
+| Cloud OS / SSHX | **1 real Ubuntu/TCG case passed, 0 failures/errors, 0 skips**; actual guest installer/client, encrypted/displayed output link, pinned management authentication, wrong-PID/unrelated-process/orphan stop checks, persistence/growth/reinstall/deletion |
+| Docker / TLS-agent | **2 native cases passed, 0 failures/errors, 0 skips** |
 
-## Boundaries and deployment acceptance
+All **nine catalog endpoints** also passed HTTPS/QCOW2 verification in that run. The full-OS success establishes the named Ubuntu path, not nine successful OS boots. Checks API annotations record `qemu-panel.xml` with one case/no skips, `docker-panel.xml` with two cases/no skips, and both `backend.xml` results; application/test source is identified explicitly so a later documentation-only commit is not mistaken for another native run. No live capability URL/private key is included in this evidence.
 
-- The supplied sandbox still has **no local QEMU/qemu-img/cloud-localds, Docker daemon or KVM**. Its four local native skips are shown, not counted as passes. Native execution takes place on the identified equipped CI runners.
-- Only **Ubuntu 24.04** received a full OS/SSH/lifecycle acceptance run; other catalog entries received endpoint checks, not complete boot certification.
-- KVM, a physical Android device, ARM hosts, live WAN/reverse-proxy deployment, rootless Docker, all storage drivers/quotas and every partition/crash timing have **not** been certified.
-- A fresh Codespaces devcontainer build and its actual long-running production deployment must still be checked in that Codespace. The Linux installer CI does not claim to be such a deployment.
-- No tests prove dedicated hardware performance, VM-grade Docker isolation, universal disk quotas, unlimited capacity, uptime or production hardening for hostile public multi-tenancy.
+**Earlier results, not substituted for current acceptance:** the merged pre-SSHX PR #3 source `4afd4ec35f6b731451232fadb6cf38c418dce8f3` passed all six jobs in [run 42352860733](https://github.com/SKYDO234/ZVM/actions/runs/42352860733). It validated historical WebSSH/installer/lifecycle source, not this replacement. The first SSHX run [42387903374](https://github.com/SKYDO234/ZVM/actions/runs/42387903374), source `129c219`, passed the other five jobs and all nine image endpoints, but **failed** the full-OS test before SSHX: unconditional cloud-init package updates exceeded 300 seconds under TCG despite the required tools already being installed. Source `2c874d8` corrected bootstrap to check first and install only missing dependencies. The subsequent successful run above verifies that correction; the earlier failure remains recorded as a failure.
 
-Before real deployment: keep port 31120 Private; enable secure cookies for HTTPS; replace the first-run admin password immediately (or opt out before startup and create your own administrator interactively); verify the selected engine and image from the provisioning host; check real serial/cloud-init/SSH readiness, not just QMP status; validate your node's TLS/proxy/socket/cgroup/storage arrangement; and back up SQLite, keys and stopped guest storage together.
+## Deployment limits
 
-The live preview uses the actual application and persistent database. A fresh empty panel receives only the requested initial admin account, with a non-blocking password-change reminder; no fake IP, fake guest or success metrics are inserted.
+- No KVM, physical Android, ARM host, live WAN/reverse-proxy node, every storage driver or all nine OS boots are certified by local protocol tests.
+- The node TLS harness uses real certificates/HTTP/SSH but redirects TCP to a loopback fixture, not a deployed external VM. Run actual node/guest acceptance in your own TLS/network arrangement.
+- A fresh real Codespaces deployment remains a separate check; Linux installer CI is not proof of that environment or uptime.
+- This is a trusted personal/team control plane, not certified hostile public multi-tenant hosting. Guest root can alter its own software/processes or start unrelated tunnels; the managed timeout is not an egress firewall against a malicious guest owner.
+- Keep port 31120 Private, use HTTPS/secure cookies, replace `admin/admin123`, isolate internet-enabled guests from host/private services, verify guest prerequisites and keep a separate native SSH recovery credential.
+- Back up SQLite, the original encryption/session keys and stopped guest storage together. Do not reset accounts/data to upgrade. Hiding/disabling a panel link is not revocation: stop the actual client/VM.

@@ -247,27 +247,3 @@ class DockerEngine:
                 return {'status': state, 'usage': usage, 'storage_enforced': spec.get('runtime', {}).get('storage_enforced', False)}
         except DockerException as exc:
             raise EngineError('Docker metrics unavailable; container state is unknown, not stopped.') from exc
-
-    def console(self, spec):
-        try:
-            with self._client() as client:
-                container = self._container(client, spec)
-                if not container:
-                    raise EngineError('Container is missing.')
-                text = container.logs(tail=200).decode(errors='replace')
-                return text or 'No container log output. Use a diagnostic command below to inspect this OS container.'
-        except DockerException as exc:
-            raise EngineError('Docker logs are currently unavailable.') from exc
-
-    def console_input(self, spec, command):
-        if not isinstance(command, str) or command not in COMMANDS:
-            raise EngineError('Choose one of the allowed container diagnostics. Arbitrary host commands are never executed.')
-        try:
-            with self._client() as client:
-                container = self._container(client, spec)
-                if not container or container.status != 'running':
-                    raise EngineError('Start the container before running diagnostics.')
-                result = container.exec_run(COMMANDS[command], user='1000:1000', privileged=False, demux=False)
-                return {'output': result.output[:32768].decode(errors='replace'), 'exit_code': result.exit_code}
-        except DockerException as exc:
-            raise EngineError(f'Container diagnostic failed: {str(exc)[:500]}') from exc

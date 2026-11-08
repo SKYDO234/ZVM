@@ -31,7 +31,7 @@ def test_csrf_is_required(client, users):
 def test_login_logout_and_safe_redirect(client, users):
     token = csrf_token(client)
     response = client.post('/login?next=//evil.example', data={'csrf_token': token, 'email': users[0].email, 'password': 'Test-only-password-123!'})
-    assert response.location.endswith('/dashboard')
+    assert response.location.endswith('/user')
     assert post(client, '/logout').status_code == 302
     assert client.get('/api/metrics').status_code == 401
 
@@ -48,9 +48,11 @@ def test_admin_authorization_and_rendering(client, users):
 
 def test_all_pages_are_connected(client, users):
     signin(client)
-    for path in ['/dashboard', '/vps', '/vps/create', '/vps/console', '/profile', '/settings', '/docs']:
+    for path in ['/user', '/dashboard', '/vps', '/profile', '/settings', '/docs']:
         response = client.get(path)
         assert response.status_code == 200, path
+    assert client.get('/vps/create').status_code == 403
+    assert client.get('/vps/console').status_code == 404
 
 
 def test_password_change_invalidates_other_sessions(app, client, users):

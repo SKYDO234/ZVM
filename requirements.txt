@@ -14,8 +14,5 @@ gunicorn>=23,<24
 pytest>=8.3,<10
 passlib>=1.7.4,<1.8
 
-# Real guest SSH and bounded browser/node WebSocket transports.
-flask-sock>=0.7.0,<0.8
-simple-websocket>=1.1.0,<2
+# Verified guest-only SSHX control and one-time credential enrollment.
 paramiko>=4.0.0,<5
-websockets>=15.0.1,<16

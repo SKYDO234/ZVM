@@ -131,9 +131,10 @@ def test_path_traversal_is_not_possible():
     with pytest.raises(EngineError):instance_dir('../vms/other')
 
 
-def test_docker_console_is_allowlisted():
-    with pytest.raises(EngineError,match='allowed container diagnostics'):
-        DockerEngine().console_input(vm_spec(),'rm -rf /')
+def test_no_public_engine_console_command_interface_remains():
+    for engine in (DockerEngine(), QemuEngine()):
+        assert not hasattr(engine, 'console')
+        assert not hasattr(engine, 'console_input')
 
 
 @pytest.mark.parametrize('resume_reply_lost',[False,True])
