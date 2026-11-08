@@ -6,8 +6,8 @@ The current repair keeps ordinary owners' backend permissions and makes their co
 
 - Final local Python suite: **366 passed, 4 skipped, 1 warning in 179.37 s**. The four documented native skips are not compatibility passes. Final focused owner/lifecycle suite: **49 passed in 39.00 s**, including failed/unproven shutdown, retained agent metadata, suspended-owner deletion, Docker NotFound cleanup and correct admin failure-audit attribution.
 - Desktop/Android browser suite: **18 passed in 2.4 minutes**, including ordinary owner Start/Stop/Restart/Delete, confirmation cancellation, foreign-owner denial, live cross-tab button updates, deleted-resource 404 and no mobile overflow/JavaScript errors. The port-5559 engine/SSH fixtures are explicitly synthetic; they never execute a shell or installer.
-- Native QEMU and Docker/TLS-agent tests now create through an admin, assign to a **separate `role=user` account**, then execute owner lifecycle actions and verify job-page/API access. The full-OS test adds owner restart/persistence and deletion of the running guest. **A fresh equipped run is required for these changes; older SSHX runs below do not prove this revised owner flow.**
-- Compile, Ruff `F`, JavaScript syntax and diff checks passed. The locked npm asset build has no unrelated vendor/font changes. No production accounts/guests are inserted by the test harnesses.
+- **All six equipped CI jobs passed** in [run 42458792864](https://github.com/SKYDO234/ZVM/actions/runs/42458792864), exact application/test source **`4efdf0e3cb797a1110f5f6900a33239af1cdf7cb`**. Native QEMU and Docker/TLS-agent tests create through an admin, assign to a **separate `role=user` account**, then execute owner lifecycle actions and verify job-page/API access. The real Ubuntu/TCG case passed (**1 case, 0 failures/errors, 0 skipped**), including owner restart/persistence, live SSHX preservation on repeated Start, and deletion of the running guest. Local/TLS-agent Docker passed (**2 cases, 0 failures/errors, 0 skipped**), including owner start/stop/restart and running-guest deletion; the local case also verifies explicit force-stop. Python 3.11/3.12, browser and actual installer/userspace-QEMU jobs also passed. Documentation-only follow-ups do not alter this tested application/test source.
+- Compile, Ruff `F`, JavaScript syntax and diff checks passed. The locked npm asset build has no unrelated vendor/font changes. No production accounts/guests are inserted by the test harnesses. The actual Gunicorn preview on 31120 passed login, eight authenticated pages, the non-blocking reminder and 412 px mobile checks with no overflow/JavaScript errors; it contains zero fake VPS records and no synthetic engine.
 
 ## Earlier SSHX / role-separation revision
 
@@ -66,7 +66,7 @@ CI uses its installed Playwright Chromium. Where an equipped local Chromium is a
 
 ### Real Ubuntu / QEMU / SSHX
 
-**SSHX-base run, before the owner lifecycle repair:** [run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688), application/test source `2c874d858a561d0ab2a2ec15b32a90f55099b399`, completed all six jobs successfully. Its full-OS check reported **1 case, 0 failures/errors, 0 skipped**, including actual guest SSHX installation, captured-link display, stop proof and reinstall/orphan checks. This is SSHX rather than historical WebSSH evidence, but it does not establish the newly revised regular-owner lifecycle flow. That repair's final equipped result must be recorded separately above.
+**Current equipped owner-lifecycle acceptance:** [run 42458792864](https://github.com/SKYDO234/ZVM/actions/runs/42458792864), application/test source `4efdf0e3cb797a1110f5f6900a33239af1cdf7cb`, completed all six jobs successfully. The full-OS check reported **1 case, 0 failures/errors, 0 skipped**. It proves admin assignment to a regular owner, real owner power/restart/persistence and graceful running-guest deletion alongside actual guest SSHX installation, live-link preservation on repeated Start, captured-link display, stop proof and reinstall/orphan recovery. All nine OS catalog endpoints were HTTPS/QCOW2-verified. The earlier [SSHX-base run 42390315688](https://github.com/SKYDO234/ZVM/actions/runs/42390315688) tested `2c874d8` before this repair; it is not substituted for this fresh result.
 
 To reproduce, install native QEMU/cloud-init/OpenSSH tools on a disposable Linux host; do not require KVM or a privileged guest container. Obtain the image checksum using the distribution-provided Ubuntu cloud-image GPG keyring:
 
@@ -96,7 +96,9 @@ Use an already accessible **local Unix** daemon with working memory/CPU controls
 SKVM_RUN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest tests/test_docker_integration.py -q -rs
 ```
 
-Tests check real queued panel creation, 128 MiB / 1 CPU / 128 PID limits, UID 1000, no privileges/host mounts/public ports, owned internal network, actual telemetry and persistent data through lifecycle/deletion. The second case goes through a real TLS/bearer agent and both queue consumers. Direct test-only SDK diagnostics are not a public Console API.
+**Current owner acceptance:** [run 42458792864](https://github.com/SKYDO234/ZVM/actions/runs/42458792864), source `4efdf0e`, native `docker-panel` check: **2 cases, 0 failures/errors, 0 skipped**. Admin provisioning assigns to a separate regular owner; that owner checks job-page/API access, start/stop/restart and deletion of running containers.
+
+Tests check real queued panel creation, 128 MiB / 1 CPU / 128 PID limits, UID 1000, no privileges/host mounts/public ports, owned internal network, actual telemetry and persistent data through lifecycle/deletion. The local case also verifies force-stop. The second case goes through a real TLS/bearer agent and both queue consumers. Direct test-only SDK diagnostics are not a public Console API.
 
 Container disk allocation remains **budget-only** unless a separately verified supported storage driver enforces it. Docker is not a full VM or an SSHX guest.
 

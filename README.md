@@ -4,7 +4,7 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
 
-**Current revision:** VM owners can start, stop, restart and delete their assigned VPS from Details or My VPS, with state-aware controls and verified graceful shutdown before deletion. A repeated Start on an already-running guest is a verified no-op, not a duplicate process or an extra RAM allocation. Administrator-only creation/assignment, the separate user workspace and guest-only **Generate SSHX** remain intact. See [SSHX setup and its external-access security boundary](docs/sshx.md) and [validation results and exact tested source revisions](docs/testing.md); earlier green runs are not automatically proof of newer code.
+**Current revision:** VM owners can start, stop, restart and delete their assigned VPS from Details or My VPS, with state-aware controls and verified graceful shutdown before deletion. A repeated Start on an already-running guest is a verified no-op, not a duplicate process or an extra RAM allocation. Administrator-only creation/assignment, the separate user workspace and guest-only **Generate SSHX** remain intact. See [SSHX setup and its external-access security boundary](docs/sshx.md) and [validation results and exact tested source revisions](docs/testing.md). **All six CI jobs passed** for application/test source `4efdf0e` in [run 42458792864](https://github.com/SKYDO234/ZVM/actions/runs/42458792864), including real regular-owner Ubuntu/TCG and Docker/TLS-node start/stop/restart and running-guest deletion, plus live SSHX preservation on repeated Start.
 
 ## The uploaded `n.txt` is the reference
 
