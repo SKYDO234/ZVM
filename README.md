@@ -6,6 +6,8 @@ A workspace-first Flask management panel for **real QEMU virtual machines** and 
 
 **Current revision:** Admin controls have dedicated pages for Users, Instances, Plans, External nodes, OS images, Configuration, Jobs, Recovery and Audit, plus separate per-VM Network, Ownership and Suspension pages. Details/My VPS identify blocking operations instead of only displaying a generic active-job error. Conflicting retries open the authorized existing job without queueing duplicate work. Recovery inspects real outcomes, can cancel an unclaimed request, and can close an interrupted basic power request as failed/unconfirmed only after proving current state—never by clearing live locks or storage reservations. Owner power/delete, admin-only creation/assignment and guest-only **Generate SSHX** remain intact. See [blocked-operation recovery](docs/operations.md), [SSHX security](docs/sshx.md) and [exact validation scopes/revisions](docs/testing.md).
 
+**SSHX waiting fix:** Generate/Stop use a separate elected queue lane; standby workers keep retrying, busy guest locks do not block the consumer, and SSH command acknowledgement is bounded. Details refreshes real task progress and recovers after transient polling errors. Existing uncertain requests still require proof, not a blind reset. [Troubleshooting and upgrade steps](docs/sshx.md#when-generate-sshx-stays-queued-or-running).
+
 ## The uploaded `n.txt` is the reference
 
 The entire 1,104-line uploaded Bash manager was read and audited before implementation. Its exact bytes are retained in [`docs/reference/n.txt`](docs/reference/n.txt). The Python engine is a conversion of its useful provisioning/lifecycle behavior—not a website that displays or executes the Bash script.

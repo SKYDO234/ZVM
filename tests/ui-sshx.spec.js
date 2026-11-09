@@ -38,6 +38,7 @@ test('owner generates protocol output link on Details, copies and stops; other u
   await page.locator('#accept-confirm').click();
   await expect(page.locator('#sshx-link')).toHaveCount(0,{timeout:20000});
   await expect(page.locator('[data-no-sshx-link]')).toBeVisible();
+  await verifyPollingRecovery(page,account);
   expect(errors).toEqual([]);
 });
 
@@ -63,3 +64,27 @@ test('existing guest enrollment verifies fingerprint and new key without reinsta
   expect(await page.content()).not.toContain(account.guest_password);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
 });
+
+
+// Reuse this test's real authenticated session: another login would exceed the
+// deliberately unchanged 15-attempt IP quota across the complete browser suite.
+async function verifyPollingRecovery(page, account) {
+  let polls=0;
+  await page.route('**/api/jobs/*',async route=>{
+    polls++;
+    if(polls===1)return route.abort('connectionfailed');
+    return route.continue();
+  });
+  await page.goto(`/vps/${account.polling_id}#sshx`);
+  await page.getByRole('button',{name:'Generate SSHX',exact:true}).click();
+  await page.locator('#accept-confirm').click();
+  await expect(page.locator('[data-sshx-state]')).toHaveText('Running',{timeout:15000});
+  await expect(page.locator('[data-sshx-message]')).toContainText('verified SSH');
+  const expected=`https://sshx.io/s/ui-protocol-${account.polling_id.replaceAll('-','')}#SyntheticUIKey0001`;
+  await expect(page.locator('#sshx-link')).toHaveText(expected,{timeout:20000});
+  expect(polls).toBeGreaterThanOrEqual(3);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
+  await page.getByRole('button',{name:'Stop SSHX',exact:true}).click();
+  await page.locator('#accept-confirm').click();
+  await expect(page.locator('#sshx-link')).toHaveCount(0,{timeout:20000});
+}

@@ -1,5 +1,14 @@
 # Validation and compatibility boundaries
 
+## SSHX queued/running stall repair
+
+- Reproduced **five failing regressions** before the fix: blocking VM-lock claims, SSHX waiting behind unrelated provisioning, a standby abandoning its queue, a new leader incorrectly relabelling live SSHX work, and the unbounded SSH command-acknowledgement wait.
+- Final local Python: **446 passed, 4 native skips, 1 warning in 174.39 s**. Additional coverage includes both queue-lane leadership takeovers and retry after a transient consumer-startup failure. Queue tests use real threads/file locks with explicitly mocked engine/guest boundaries; the SSH acknowledgement regression uses a real SSH protocol fixture without executing a shell or installer.
+- Final desktop/Pixel 7 browser suite: **20 passed in 2.3 minutes**. The Generate/Stop flow now also injects a dropped status request, verifies live Running/message updates and automatic recovery to the completed link. It reuses the test's real authenticated session rather than weakening the production login rate limit. Browser SSHX links remain explicitly synthetic.
+- Compile, Ruff `F`, JavaScript syntax, locked asset build and diff checks passed; no unrelated package-lock/vendor/font changes.
+- Fresh equipped acceptance for this repair is pending. The older results below are not substituted for the new source; this sandbox still has no local QEMU/Docker or guest-outbound SSHX access.
+- See [queued/running troubleshooting and safe rollout](sshx.md#when-generate-sshx-stays-queued-or-running). No production guest/account reset or force-unlock is part of this fix.
+
 ## Blocking-operation recovery and dedicated admin pages
 
 - Final local Python: **439 passed, 4 native skips, 1 warning in 142.47 s**, including default-password access to all nine dedicated admin pages. Compile, Ruff `F`, JavaScript syntax, diff checks and the locked asset build passed. No unrelated vendor/font/manifest changes.

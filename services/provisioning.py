@@ -104,6 +104,8 @@ def queue_action(user, vps, action, extra=None):
         job = Job(id=str(uuid.uuid4()), owner_id=job_owner, instance_id=vps.id, node_id=vps.node_id,
                   kind=action, engine=vps.engine, ram_mb=vps.ram_mb if assignee else 0,
                   vcpus=vps.vcpus if assignee else 0, disk_gb=vps.disk_gb if assignee else growth, payload=encrypt(extra))
+        if action in ('sshx_generate', 'sshx_stop'):
+            job.message = 'Waiting for the SSHX worker and exclusive access to this VM; unrelated provisioning uses a separate queue.'
         db.session.add(job)
         audit(f'{action}.queued', f'{action.replace("_", " ").title()} requested for {vps.name}.', user.id, vps.id)
         db.session.commit()
@@ -199,9 +201,15 @@ def _apply_result(job, payload, result):
 def process_job(job_id):
     try:
         with execution_lock(job_id):
-            return _process_job(job_id)
+            job = db.session.get(Job, job_id, populate_existing=True)
+            if not job or job.status != 'queued':
+                return
+            # Do not mark work running, or stall a queue, behind another live
+            # VM controller. Cancellation/reconciliation use the same locks.
+            with locked(f'control-{job.instance_id}', blocking=False):
+                return _process_job(job_id)
     except BlockingIOError:
-        return False  # Another worker or a verified queued cancellation owns this ID.
+        return False
 
 
 def _process_job(job_id):
@@ -217,8 +225,10 @@ def _process_job(job_id):
         payload = decrypt(job.payload)
         actor_id = payload.get('actor_id', job.owner_id)
         job.status = 'running'
-        job.message = ('Validating configuration and provisioning with the real engine…' if job.kind == 'create' else
-                       'Validating the lifecycle request and actual managed instance state…')
+        job.message = ('Connecting to this VM through verified SSH. The guest installer/client has a bounded deadline; no host installation is performed.'
+                       if job.kind in ('sshx_generate', 'sshx_stop') else
+                       ('Validating configuration and provisioning with the real engine…' if job.kind == 'create' else
+                        'Validating the lifecycle request and actual managed instance state…'))
         db.session.commit()
         user = db.session.get(User, payload.get('actor_id', job.owner_id))
         if not user or not user.enabled:
@@ -232,106 +242,105 @@ def _process_job(job_id):
         # Capacity reservations live in Job rows. Keep the global lock short during large downloads.
         # Only disk growth holds it across the (short) resize operation, since that changes a reservation.
         from contextlib import nullcontext
-        with locked(f'control-{job.instance_id}'):
-            with locked('allocation'):
-                if current_app.config['TEST_MODE']:
-                    raise EngineError('Test mode: no real resources or VPS records are created.')
-                if job.kind == 'create':
-                    spec = payload['spec']
-                    owner = db.session.get(User, spec['owner_id'])
+        with locked('allocation'):
+            if current_app.config['TEST_MODE']:
+                raise EngineError('Test mode: no real resources or VPS records are created.')
+            if job.kind == 'create':
+                spec = payload['spec']
+                owner = db.session.get(User, spec['owner_id'])
+                if not owner or not owner.enabled or owner.id != job.owner_id:
+                    raise EngineError('The assigned account is disabled or the quota owner changed.')
+                quota_check(owner, spec, exclude_job=job.id)
+                capacity_check(spec, node, exclude_job=job.id)
+                if job.engine == 'qemu' and not spec['ssh_port']:
+                    spec['ssh_port'] = allocate_port(node, exclude_ports=[p['host'] for p in spec.get('forwards', [])])
+                validate_ports(spec, node)
+                payload['spec'] = spec
+                if job.engine == 'qemu' and not payload.get('control_private_key'):
+                    private, public = new_key()
+                    payload['control_private_key'] = private
+                    payload['credentials'] = dict(payload.get('credentials', {}), control_public_key=public)
+                job.payload = encrypt(payload)
+                db.session.commit()
+            else:
+                vps = db.session.get(VPS, job.instance_id)
+                if not vps:
+                    raise EngineError('The instance no longer exists.')
+                if vps.owner_id != user.id and not user.is_admin:
+                    raise EngineError('Instance ownership check failed.')
+                if vps.suspended and job.kind in ('start', 'restart', 'reinstall', 'sshx_generate'):
+                    raise EngineError('The instance is suspended.')
+                spec = vps.spec()
+                if job.kind == 'start':
+                    already_running = running_result(engine, spec)
+                if job.kind in ('start', 'restart') and already_running is None:
+                    capacity_check(spec, node, resize_of=vps, require_available_ram=job.kind != 'restart')
+                if job.kind in ('suspend', 'unsuspend', 'network', 'assign') and not user.is_admin:
+                    raise EngineError('An administrator role is required.')
+                if job.kind == 'assign':
+                    owner = db.session.get(User, payload['owner_id'])
                     if not owner or not owner.enabled or owner.id != job.owner_id:
-                        raise EngineError('The assigned account is disabled or the quota owner changed.')
-                    quota_check(owner, spec, exclude_job=job.id)
-                    capacity_check(spec, node, exclude_job=job.id)
-                    if job.engine == 'qemu' and not spec['ssh_port']:
-                        spec['ssh_port'] = allocate_port(node, exclude_ports=[p['host'] for p in spec.get('forwards', [])])
-                    validate_ports(spec, node)
-                    payload['spec'] = spec
-                    if job.engine == 'qemu' and not payload.get('control_private_key'):
-                        private, public = new_key()
-                        payload['control_private_key'] = private
-                        payload['credentials'] = dict(payload.get('credentials', {}), control_public_key=public)
-                    job.payload = encrypt(payload)
+                        raise EngineError('The assigned account is disabled or changed.')
+                    quota_check(owner, spec | {'owner_id': owner.id}, exclude_job=job.id)
+        with (locked('allocation') if job.kind in ('resize', 'assign') else nullcontext()):
+            if job.kind == 'resize':
+                new_spec = spec | {'disk_gb': payload['disk_gb']}
+                quota_check(vps.owner, new_spec, resize_of=vps, exclude_job=job.id)
+                capacity_check(new_spec, node, resize_of=vps, exclude_job=job.id, require_available_ram=False)
+            mutated = already_running is None
+            if already_running is not None:
+                result = already_running
+            elif job.kind in ('sshx_generate', 'sshx_stop'):
+                payload['sshx_started_at'] = utcnow().isoformat()
+                job.payload = encrypt(payload)
+                db.session.commit()
+                private, pin = sshx.stored_access(spec['id'])
+                guard = GuestGuard(spec, user, node)
+                previous = db.session.get(SSHXSession, spec['id'])
+                if previous:
+                    previous.state = 'uncertain'  # Hiding a link is NOT claiming it was revoked.
                     db.session.commit()
-                else:
-                    vps = db.session.get(VPS, job.instance_id)
-                    if not vps:
-                        raise EngineError('The instance no longer exists.')
-                    if vps.owner_id != user.id and not user.is_admin:
-                        raise EngineError('Instance ownership check failed.')
-                    if vps.suspended and job.kind in ('start', 'restart', 'reinstall', 'sshx_generate'):
-                        raise EngineError('The instance is suspended.')
-                    spec = vps.spec()
-                    if job.kind == 'start':
-                        already_running = running_result(engine, spec)
-                    if job.kind in ('start', 'restart') and already_running is None:
-                        capacity_check(spec, node, resize_of=vps, require_available_ram=job.kind != 'restart')
-                    if job.kind in ('suspend', 'unsuspend', 'network', 'assign') and not user.is_admin:
-                        raise EngineError('An administrator role is required.')
-                    if job.kind == 'assign':
-                        owner = db.session.get(User, payload['owner_id'])
-                        if not owner or not owner.enabled or owner.id != job.owner_id:
-                            raise EngineError('The assigned account is disabled or changed.')
-                        quota_check(owner, spec | {'owner_id': owner.id}, exclude_job=job.id)
-            with (locked('allocation') if job.kind in ('resize', 'assign') else nullcontext()):
-                if job.kind == 'resize':
-                    new_spec = spec | {'disk_gb': payload['disk_gb']}
-                    quota_check(vps.owner, new_spec, resize_of=vps, exclude_job=job.id)
-                    capacity_check(new_spec, node, resize_of=vps, exclude_job=job.id, require_available_ram=False)
-                mutated = already_running is None
-                if already_running is not None:
-                    result = already_running
-                elif job.kind in ('sshx_generate', 'sshx_stop'):
-                    payload['sshx_started_at'] = utcnow().isoformat()
-                    job.payload = encrypt(payload)
-                    db.session.commit()
-                    private, pin = sshx.stored_access(spec['id'])
-                    guard = GuestGuard(spec, user, node)
-                    previous = db.session.get(SSHXSession, spec['id'])
-                    if previous:
-                        previous.state = 'uncertain'  # Hiding a link is NOT claiming it was revoked.
-                        db.session.commit()
-                    with admission(f'user:{user.id}', spec['id']):
-                        result = sshx.dispatch(spec, 'generate' if job.kind == 'sshx_generate' else 'stop', node=node,
-                                               private=private, host_fingerprint=pin, operation_id=job.id,
-                                               seconds=current_app.config['SSHX_MAX_SECONDS'], check=guard)
-                    try:
-                        guard(force=True)
-                    except EngineError:
-                        raise UncertainError('Authority changed after an SSHX guest operation. Inspect its outcome or stop the VM.') from None
-                elif job.kind == 'assign':
-                    result = engine.assign(spec, payload['owner_id'], operation_id=job.id)
-                elif job.kind == 'network':
-                    result = engine.network(spec, payload['network_restricted'], operation_id=job.id)
-                elif job.kind == 'create':
-                    result = engine.create(spec, payload['credentials'], operation_id=job.id)
-                elif job.kind == 'restart' and node is None:
-                    stop_before_transition(engine, spec, operation_id=job.id)
-                    # The old process has released memory. Recheck actual availability now.
-                    with locked('allocation'):
-                        capacity_check(spec, resize_of=vps, exclude_job=job.id)
-                    result = engine.start(spec, operation_id=job.id)
-                elif job.kind == 'delete' and node is None:
-                    # One owner-authorized job, with no implicit Force stop.
-                    # External nodes perform this atomically in their worker;
-                    # never reuse one remote operation ID for stop then delete.
-                    stop_before_transition(engine, spec, operation_id=job.id)
-                    result = engine.delete(spec, operation_id=job.id)
-                elif job.kind == 'suspend':
-                    result = engine.stop(spec, operation_id=job.id)
-                elif job.kind == 'unsuspend':
-                    result = {'status': 'unsuspended'}
-                elif job.kind == 'resize':
-                    result = engine.resize(spec, payload['disk_gb'], operation_id=job.id)
-                elif job.kind == 'reinstall':
-                    result = engine.reinstall(payload['spec'], payload['credentials'], operation_id=job.id)
-                else:
-                    result = getattr(engine, job.kind)(spec, operation_id=job.id)
-                if job.kind in ('resize', 'assign'):
+                with admission(f'user:{user.id}', spec['id']):
+                    result = sshx.dispatch(spec, 'generate' if job.kind == 'sshx_generate' else 'stop', node=node,
+                                           private=private, host_fingerprint=pin, operation_id=job.id,
+                                           seconds=current_app.config['SSHX_MAX_SECONDS'], check=guard)
+                try:
+                    guard(force=True)
+                except EngineError:
+                    raise UncertainError('Authority changed after an SSHX guest operation. Inspect its outcome or stop the VM.') from None
+            elif job.kind == 'assign':
+                result = engine.assign(spec, payload['owner_id'], operation_id=job.id)
+            elif job.kind == 'network':
+                result = engine.network(spec, payload['network_restricted'], operation_id=job.id)
+            elif job.kind == 'create':
+                result = engine.create(spec, payload['credentials'], operation_id=job.id)
+            elif job.kind == 'restart' and node is None:
+                stop_before_transition(engine, spec, operation_id=job.id)
+                # The old process has released memory. Recheck actual availability now.
+                with locked('allocation'):
+                    capacity_check(spec, resize_of=vps, exclude_job=job.id)
+                result = engine.start(spec, operation_id=job.id)
+            elif job.kind == 'delete' and node is None:
+                # One owner-authorized job, with no implicit Force stop.
+                # External nodes perform this atomically in their worker;
+                # never reuse one remote operation ID for stop then delete.
+                stop_before_transition(engine, spec, operation_id=job.id)
+                result = engine.delete(spec, operation_id=job.id)
+            elif job.kind == 'suspend':
+                result = engine.stop(spec, operation_id=job.id)
+            elif job.kind == 'unsuspend':
+                result = {'status': 'unsuspended'}
+            elif job.kind == 'resize':
+                result = engine.resize(spec, payload['disk_gb'], operation_id=job.id)
+            elif job.kind == 'reinstall':
+                result = engine.reinstall(payload['spec'], payload['credentials'], operation_id=job.id)
+            else:
+                result = getattr(engine, job.kind)(spec, operation_id=job.id)
+            if job.kind in ('resize', 'assign'):
+                _apply_result(job, payload, result)
+            else:
+                with locked('allocation'):
                     _apply_result(job, payload, result)
-                else:
-                    with locked('allocation'):
-                        _apply_result(job, payload, result)
     except UncertainError as exc:
         db.session.rollback()
         job = db.session.get(Job, job_id)
@@ -454,35 +463,64 @@ def _reconcile_locked(job):
         _apply_result(job, payload, result)
 
 
+SSHX_JOBS = ('sshx_generate', 'sshx_stop')
+
+
+def _consume_jobs(app, stop_event, sshx_only):
+    from services.maintenance import start_maintenance
+    start_maintenance(app)
+    scope = Job.kind.in_(SSHX_JOBS) if sshx_only else Job.kind.not_in(SSHX_JOBS)
+    interrupted = list(db.session.scalars(db.select(Job.id).where(scope, Job.status == 'running')))
+    for ident in interrupted:
+        try:
+            with execution_lock(ident):
+                job = db.session.get(Job, ident, populate_existing=True)
+                if job and job.status == 'running':
+                    with locked(f'control-{job.instance_id}', blocking=False):
+                        job.status = 'uncertain'
+                        job.message = 'Worker stopped during an operation. An administrator must inspect its actual outcome; it was not replayed.'
+                        db.session.commit()
+        except BlockingIOError:
+            # A surviving executor owns this ID/VM. It is not interrupted.
+            db.session.rollback()
+    db.session.remove()
+    while not stop_event.is_set():
+        try:
+            candidates = list(db.session.scalars(db.select(Job.id).where(scope, Job.status == 'queued')
+                                                 .order_by(Job.created_at, Job.id)))
+            progressed = False
+            for ident in candidates:
+                if stop_event.is_set():
+                    break
+                if process_job(ident) is not False:
+                    progressed = True
+                    break
+            if not progressed:
+                stop_event.wait(.25 if candidates else .5)
+        except Exception:
+            logging.exception('SSHX queue error' if sshx_only else 'Provisioning queue error')
+            db.session.rollback()
+            stop_event.wait(2)
+        finally:
+            db.session.remove()
+
+
+def sshx_loop(app, stop_event):
+    from services.background import run_elected
+    run_elected(app, 'sshx-worker-leader', stop_event,
+                lambda stop: _consume_jobs(app, stop, sshx_only=True))
+
+
 def worker_loop(app, stop_event=None):
     stop_event = stop_event or threading.Event()
     if app.config['TEST_MODE']:
         return
-    from services.maintenance import start_maintenance
-    with app.app_context():
-        try:
-            with locked('worker-leader', blocking=False):
-                start_maintenance(app)
-                for job in db.session.scalars(db.select(Job).where(Job.status == 'running')):
-                    job.status = 'uncertain'
-                    job.message = 'Worker stopped during an operation. Resources may exist; an administrator must reconcile this job.'
-                db.session.commit()
-                while not stop_event.is_set():
-                    try:
-                        ident = db.session.scalar(db.select(Job.id).where(Job.status == 'queued').order_by(Job.created_at).limit(1))
-                        if ident:
-                            if process_job(ident) is False:
-                                stop_event.wait(.25)
-                        else:
-                            stop_event.wait(1)
-                    except Exception:
-                        logging.exception('Worker loop error')
-                        db.session.rollback()
-                        stop_event.wait(2)
-                    finally:
-                        db.session.remove()
-        except BlockingIOError:
-            logging.info('Another worker owns the workspace queue.')
+    from services.background import run_elected, start_background
+    # A slow download/remote provisioning operation must not starve an SSHX
+    # request for a different VM. Both lanes still take the same per-job/VM locks.
+    start_background(app, 'skvm-sshx', sshx_loop)
+    run_elected(app, 'worker-leader', stop_event,
+                lambda stop: _consume_jobs(app, stop, sshx_only=False))
 
 
 def start_worker(app):

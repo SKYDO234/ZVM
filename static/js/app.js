@@ -60,7 +60,7 @@
     const res = await fetch(url, {cache: 'no-store', credentials: 'same-origin', ...options,
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': token, ...options.headers}});
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
+    if (!res.ok) { const error = new Error(data.error || `Request failed (${res.status}).`); error.status = res.status; throw error; }
     return data;
   };
   const sidebar = $('#sidebar'), shade = $('#sidebar-shade');
@@ -204,16 +204,26 @@
   }
   const sshxTask = document.querySelector('[data-sshx-job]');
   if (sshxTask) {
-    let timer;
+    let timer, busy = false, warned = false;
     const poll = async () => {
-      if (document.hidden) return;
+      if (document.hidden || busy) return;
+      busy = true;
+      const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
       try {
-        const data = await api('/api/jobs/' + sshxTask.dataset.sshxJob);
-        if (!['queued','running'].includes(data.status)) {
+        const data = await api('/api/jobs/' + sshxTask.dataset.sshxJob, {signal: controller.signal});
+        warned = false;
+        const state = $('[data-sshx-state]', sshxTask), message = $('[data-sshx-message]', sshxTask);
+        if (state) state.textContent = String(data.status).replace(/^./, c => c.toUpperCase());
+        if (message) message.textContent = data.message;
+        if (!['queued','running','uncertain'].includes(data.status)) {
           clearInterval(timer);
-          if (data.status !== sshxTask.dataset.initialStatus) location.reload();
+          location.reload();
         }
-      } catch (error) { clearInterval(timer); toast(error.message, 'error'); }
+      } catch (error) {
+        if ([401,403,404].includes(error.status)) clearInterval(timer);
+        if (!warned) toast(error.name === 'AbortError' ? 'SSHX status request timed out; retrying automatically.' : error.message, 'error');
+        warned = true;
+      } finally { clearTimeout(timeout); busy = false; }
     };
     timer = setInterval(poll, 2000); poll();
   }

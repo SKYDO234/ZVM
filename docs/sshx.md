@@ -14,6 +14,16 @@ Normal users cannot access creation/review confirmation or assignment operations
 
 An administrator can reassign an existing **stopped QEMU VM** from Advanced controls. The target account must be enabled and have quota. This preserves guest disk data and does **not** rotate its native SSH passwords/keys: review those credentials before transferring a guest between people. The stopped guest cannot retain a running SSHX client. New container ownership is selected at creation; reassignment of existing Docker instances is intentionally not implemented.
 
+## When Generate SSHX stays queued or running
+
+SSHX Generate/Stop now have their own elected background consumer. A long image download or remote provisioning operation for another VPS no longer occupies that consumer. Standbys keep retrying leadership, and transient consumer-startup failures are retried rather than silently leaving the queue without a worker. An occupied per-VM control lock leaves the request **queued** without blocking the consumer; other eligible VMs can proceed. Live execution locks are not reset or declared interrupted just because another consumer starts.
+
+The guest command has one deadline covering channel setup, command acknowledgement, script submission and output. Paramiko's command-acknowledgement wait is separately bounded to at most ten seconds within that budget; its normal channel socket timeout alone does not bound this wait. A lost acknowledgement is **uncertain**, not proof that the guest did nothing, and the operation is never blindly replayed.
+
+Details updates the actual queued/running/uncertain status and message while polling. A transient failed or hung status fetch is retried; successful completion reloads the Details page to display the real encrypted/stored output link. These changes do not enable restricted networking, waive enrollment/host-key checks, or install SSHX on the panel host.
+
+After upgrading, drain/restart **all** old panel workers before using the two queue lanes, and update/restart agents for the bounded guest SSH handling. A pre-existing interrupted job may become **uncertain**, not automatically cancelled. An administrator should use **Recovery → Inspect actual outcome** to recover its original guest operation marker without replaying the installer. If the outcome cannot be proven, stopping the VM through its normal verified shutdown path ends the guest client and settles uncertain SSHX work; no reset/reinstall or arbitrary job deletion is needed. Never forcibly clear a live job lock.
+
 ## Owner or administrator: Generate SSHX
 
 Open the selected VPS Details → **SSHX terminal access** → **Generate SSHX**, and confirm the third-party shared-terminal warning.
