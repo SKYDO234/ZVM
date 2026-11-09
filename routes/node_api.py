@@ -151,7 +151,7 @@ def instance_status(ident):
 def guest_ssh(ident):
     from engines import UncertainError
     from services.guest_access import GuestGuard, target
-    from services.guest_ssh import admission
+    from services.guest_ssh import GuestSSHRetryableError, admission
     from services.security import locked
     from services import sshx
     data = {}
@@ -180,6 +180,10 @@ def guest_ssh(ident):
                 return jsonify(sshx.result(value, mode))
     except UncertainError:
         return jsonify(error='Guest operation outcome is uncertain. Inspect before retrying.'), 503
+    except GuestSSHRetryableError as exc:
+        # A fixed code, not raw banners/output or credentials, permits only a
+        # proven pre-command retry on the controlling panel.
+        return jsonify(error=str(exc), code=exc.code), 409
     except (EngineError, BlockingIOError, TypeError, AttributeError, KeyError):
         return jsonify(error='Guest operation rejected. Check the managed target, guest readiness, credentials and network policy.'), 409
     finally:

@@ -34,17 +34,18 @@ def _operator(actor, expected_tag=None):
 
 
 def cancel_queued(job, actor):
-    """The execution lock makes cancellation and worker claims mutually exclusive."""
+    """Cancel queued work, including a released pre-command SSH readiness retry."""
     actor = _operator(actor)
     tag = actor.get_id()
     try:
         with execution_lock(job.id), locked(f'control-{job.instance_id}', blocking=False), locked('allocation'):
             db.session.refresh(job)
             if job.status != 'queued':
-                raise EngineError('Only a queued, unclaimed job can be cancelled. Started or uncertain work requires inspection.')
+                raise EngineError('Only a queued, non-executing request can be cancelled. Running or uncertain work requires inspection.')
             _operator(actor, tag)
             job.status, job.payload = 'cancelled', None
-            job.message = 'Cancelled before the worker claimed this request. No engine action was performed.'
+            job.message = ('Cancelled while queued and not executing. No guest mutation command was sent by this request. '
+                           'Existing resources and any prior SSHX client were not changed.')
             audit('job.cancelled', job.message, actor.id, job.instance_id)
             db.session.commit()
     except BlockingIOError as exc:

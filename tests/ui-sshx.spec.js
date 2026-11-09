@@ -11,6 +11,7 @@ async function login(page, account, other=false){
 }
 
 test('owner generates protocol output link on Details, copies and stops; other user is denied', async ({page,browser},info)=>{
+  test.setTimeout(60000); // Includes the real 15-second pre-command readiness retry.
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   const account=state()[info.project.name];
   await login(page,account);await page.goto(`/vps/${account.managed_id}#sshx`);
@@ -78,7 +79,11 @@ async function verifyPollingRecovery(page, account) {
   await page.goto(`/vps/${account.polling_id}#sshx`);
   await page.getByRole('button',{name:'Generate SSHX',exact:true}).click();
   await page.locator('#accept-confirm').click();
-  await expect(page.locator('[data-sshx-state]')).toHaveText('Running',{timeout:15000});
+  await expect(page.locator('[data-sshx-state]')).toHaveText('Queued',{timeout:10000});
+  await expect(page.locator('[data-sshx-message]')).toContainText('Waiting for guest SSH');
+  await expect(page.getByRole('button',{name:'Generate SSHX',exact:true})).toBeDisabled();
+  await expect(page.locator('#sshx-link')).toHaveCount(0);
+  await expect(page.locator('[data-sshx-state]')).toHaveText('Running',{timeout:30000});
   await expect(page.locator('[data-sshx-message]')).toContainText('verified SSH');
   const expected=`https://sshx.io/s/ui-protocol-${account.polling_id.replaceAll('-','')}#SyntheticUIKey0001`;
   await expect(page.locator('#sshx-link')).toHaveText(expected,{timeout:20000});

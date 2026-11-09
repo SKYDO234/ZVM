@@ -61,6 +61,7 @@ def configuration():
         NODE_CA_BUNDLE=os.getenv('SKVM_NODE_CA_BUNDLE'),
         SSHX_ENABLED=os.getenv('SKVM_SSHX_ENABLED', '1') == '1',
         SSHX_MAX_SECONDS=int(os.getenv('SKVM_SSHX_MAX_SECONDS', '3600')),
+        SSHX_READY_SECONDS=int(os.getenv('SKVM_SSHX_READY_SECONDS', '600')),
         NODE_AGENT=False,
         START_WORKER=False,
     )

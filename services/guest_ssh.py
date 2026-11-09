@@ -35,6 +35,34 @@ SSH_LOGGER.propagate = False
 FINGERPRINT = re.compile(r'SHA256:[A-Za-z0-9+/]{43}')
 
 
+class GuestSSHRetryableError(EngineError):
+    """Proven pre-command failure, never an uncertain guest mutation."""
+
+
+class GuestSSHNotReadyError(GuestSSHRetryableError):
+    code = 'guest_ssh_not_ready'
+
+    def __init__(self):
+        super().__init__('The VM’s verified SSH service is not ready yet. Wait for guest boot/cloud-init and check sshd. No guest credentials or command were sent.')
+
+
+class GuestSSHChannelNotReadyError(GuestSSHRetryableError):
+    code = 'guest_ssh_channel_not_ready'
+
+    def __init__(self):
+        super().__init__('Guest SSH authenticated, but its command channel is not ready. No guest command was submitted; wait for boot/cloud-init/sshd to settle.')
+
+
+class GuestSSHBusyError(GuestSSHRetryableError):
+    code = 'guest_ssh_busy'
+
+    def __init__(self):
+        super().__init__('Guest SSH admission/rate limit reached. Wait one minute and retry.')
+
+
+SSH_RETRY_ERRORS = {error.code: error for error in (GuestSSHNotReadyError, GuestSSHChannelNotReadyError, GuestSSHBusyError)}
+
+
 def new_key():
     key = Ed25519PrivateKey.generate()
     private = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
@@ -93,7 +121,7 @@ def admission(principal, ident):
             AuthAttempt.fingerprint == tag, AuthAttempt.created_at > now - timedelta(minutes=1)))
         if total >= 4 or own >= 2 or attempts >= 10:
             db.session.rollback()
-            raise EngineError('Guest SSH admission/rate limit reached. Wait one minute and retry.')
+            raise GuestSSHBusyError()
         db.session.add(AuthAttempt(fingerprint=tag))
         db.session.add(GuestLease(id=lease, principal=principal, instance_id=ident,
                                   expires_at=now + timedelta(seconds=180)))
@@ -123,8 +151,8 @@ class GuestSSH:
             self.transport.set_log_channel(SSH_LOGGER.name)
             self.transport.banner_timeout = self.transport.auth_timeout = 10
             self.transport.start_client(timeout=10)
-            if not self.transport.is_active() or self.transport.remote_version is None:
-                raise EngineError('The guest did not complete its SSH handshake.')
+            if not self.transport.is_active() or not self.transport.remote_version:
+                raise GuestSSHNotReadyError()
             check()
             QemuEngine().ssh_endpoint(spec)  # Re-prove the listener after the handshake.
             self.fingerprint = fingerprint(self.transport.get_remote_server_key())
@@ -133,9 +161,15 @@ class GuestSSH:
         except EngineError:
             self.close()
             raise
+        except paramiko.ssh_exception.IncompatiblePeer:
+            self.close()
+            raise EngineError('The guest SSH service has no compatible key-exchange or host-key algorithm. Upgrade its SSH configuration; no credentials or command were sent.') from None
+        except (OSError, EOFError, paramiko.SSHException):
+            self.close()
+            raise GuestSSHNotReadyError() from None
         except Exception:
             self.close()
-            raise EngineError('Cannot establish verified guest SSH. Start the VM, wait for cloud-init/sshd, and check its managed SSH forward.') from None
+            raise EngineError('Cannot establish verified guest SSH before authentication. Check its guest SSH service and managed forward. No guest command was sent.') from None
 
     def authenticate(self, auth):
         auth = credentials(auth)
@@ -152,7 +186,7 @@ class GuestSSH:
         except (EngineError, SSHError):
             raise
         except Exception:
-            raise EngineError('Guest SSH authentication failed. Use the guest account credentials, not your panel password.') from None
+            raise EngineError('Guest SSH authentication failed. Use the guest account credentials, not your panel password. If a saved management key was rejected, use Repair management access with the existing guest credential; no VPS reset is needed.') from None
         finally:
             if self.transport and self.transport.auth_handler:
                 self.transport.auth_handler.password = None
@@ -249,10 +283,15 @@ class GuestSSH:
             raise
         except EngineError:
             raise
-        except Exception:
+        except Exception as exc:
             if started:
                 raise UncertainError('The guest connection ended after command submission. Inspect its outcome before retrying.') from None
-            raise EngineError('Cannot open a guest SSH command channel.') from None
+            # SSH channel-open confirmation can lag successful authentication
+            # under a cold TCG boot. There is still no exec request or script to
+            # replay here. Identity/authority failures were handled above.
+            if isinstance(exc, (OSError, EOFError, paramiko.SSHException)):
+                raise GuestSSHChannelNotReadyError() from None
+            raise EngineError('Cannot open a guest SSH command channel before command submission.') from None
         finally:
             if channel:
                 channel.close()

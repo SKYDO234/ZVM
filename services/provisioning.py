@@ -2,6 +2,7 @@ import logging
 import hashlib
 import threading
 import uuid
+from datetime import datetime, timedelta
 from flask import current_app
 from engines import EngineError, UncertainError, engine_for
 from extensions import db
@@ -9,11 +10,53 @@ from models import GuestAccess, Job, Node, SSHXSession, User, VPS
 from models.user import utcnow
 from services.security import audit, decrypt, encrypt, integer, locked, safe_message, settings
 from services.validation import capacity_check, quota_check
-from services.guest_ssh import admission, new_key
+from services.guest_ssh import GuestSSHBusyError, GuestSSHRetryableError, admission, new_key
 from services.guest_access import GuestGuard
 from services import sshx
 from services.job_control import execution_lock
 from services.lifecycle import ACTIVE_JOBS, POWER_ACTIONS, JobConflict, running_result, shutdown_recovery, stop_before_transition
+
+
+SSHX_JOBS = ('sshx_generate', 'sshx_stop')
+SSHX_RETRY_SECONDS = 15
+SSHX_READY_TIMEOUT = ('Timed out waiting for guest SSH readiness/admission. No SSHX guest command was sent by this request. '
+                     'Check guest boot/cloud-init, sshd and its managed SSH forward, then retry the requested SSHX action. '
+                     'The VPS was not reset; an existing client is not claimed stopped.')
+
+
+def _sshx_due(payload):
+    """Persist a boot budget separate from queue age and client lifetime."""
+    now = utcnow()
+    deadline = payload.setdefault('sshx_ready_deadline',
+                                  (now + timedelta(seconds=current_app.config['SSHX_READY_SECONDS'])).isoformat())
+    if now >= datetime.fromisoformat(deadline):
+        raise EngineError(SSHX_READY_TIMEOUT)
+    retry_at = payload.get('sshx_retry_at')
+    return retry_at is None or now >= datetime.fromisoformat(retry_at)
+
+
+def _defer_sshx(job, payload, error):
+    """Release execution/VM locks only after proof no guest command was sent.
+
+    There is no retry of authentication rejection, identity failure, installer
+    error, exec submission, timeout after mutation or lost node response.
+    """
+    now = utcnow()
+    remaining = (datetime.fromisoformat(payload['sshx_ready_deadline']) - now).total_seconds()
+    if remaining <= 0:
+        return False
+    delay = min(SSHX_RETRY_SECONDS, remaining)
+    payload['sshx_retry_at'] = (now + timedelta(seconds=delay)).isoformat()
+    payload['sshx_ready_attempts'] = payload.get('sshx_ready_attempts', 0) + 1
+    payload.pop('sshx_started_at', None)  # Waiting must not consume a future client's TTL.
+    reason = ('connection admission is busy; existing concurrency/rate limits remain enforced' if isinstance(error, GuestSSHBusyError)
+              else 'Linux/cloud-init/sshd may still be booting, especially under TCG')
+    job.status, job.payload = 'queued', encrypt(payload)
+    job.message = (f'Waiting for guest SSH: {reason}. Automatic retry in {delay:g} seconds '
+                   f'({int(remaining)} seconds left in the boot-readiness window). '
+                   'No SSHX guest command has been sent; other eligible VMs can proceed.')
+    db.session.commit()
+    return True
 
 
 def queue_create(user, spec, credentials, node=None):
@@ -224,6 +267,8 @@ def _process_job(job_id):
     try:
         payload = decrypt(job.payload)
         actor_id = payload.get('actor_id', job.owner_id)
+        if job.kind in SSHX_JOBS and not _sshx_due(payload):
+            return False
         job.status = 'running'
         job.message = ('Connecting to this VM through verified SSH. The guest installer/client has a bounded deadline; no host installation is performed.'
                        if job.kind in ('sshx_generate', 'sshx_stop') else
@@ -357,6 +402,10 @@ def _process_job(job_id):
         job = db.session.get(Job, job_id)
         if job.status == 'completed':
             return
+        if job.kind in SSHX_JOBS and isinstance(exc, GuestSSHRetryableError):
+            if _defer_sshx(job, payload, exc):
+                return False
+            exc = EngineError(SSHX_READY_TIMEOUT)
         if mutated and not isinstance(exc, EngineError):
             job.status = 'uncertain'
             job.message = 'An engine mutation may have completed before an internal or persistence error. Inspect actual resources before recovery.'
@@ -461,9 +510,6 @@ def _reconcile_locked(job):
     result = inspect_outcome(job.kind, spec, payload, engine_for(job.engine))
     with locked('allocation'):
         _apply_result(job, payload, result)
-
-
-SSHX_JOBS = ('sshx_generate', 'sshx_stop')
 
 
 def _consume_jobs(app, stop_event, sshx_only):

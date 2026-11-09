@@ -81,7 +81,15 @@ with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as direct
         return 0, 'SKVM_RUNNING\nSKVM_SECONDS:3600\nLink: https://sshx.io/s/ui-protocol-' + ident.replace('-', '') + '#SyntheticUIKey0001\n'
     ssh.program = program
     engine = ProtocolFixtureEngine()
-    with (patch.object(QemuEngine, 'ssh_endpoint', lambda self, spec: ssh.endpoint),
+    boot_attempted = set()
+
+    def endpoint(self, spec):
+        if spec['id'] in slow_instances and spec['id'] not in boot_attempted:
+            boot_attempted.add(spec['id'])
+            ssh.unready_connections = 1  # Reset this fixture's first pre-KEX dial.
+        return ssh.endpoint
+
+    with (patch.object(QemuEngine, 'ssh_endpoint', endpoint),
           patch('services.resource_monitor.engine_for', return_value=engine),
           patch('services.provisioning.engine_for', return_value=engine),
           patch('services.job_control.engine_for', return_value=engine),

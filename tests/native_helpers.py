@@ -29,6 +29,8 @@ class NativePanel:
             assert result.status_code==302
         self.client=self.admin_client
         self.ident=None
+        self.job_observations={}
+        self.last_sshx_job=None
         start_worker(app)
 
     def post(self,url,data=None,admin=False):
@@ -40,11 +42,15 @@ class NativePanel:
         assert '/vps/jobs/' in response.location,response.location
         ident=response.location.rstrip('/').rsplit('/',1)[1]
         deadline=time.monotonic()+1500
+        observed=[]
         while time.monotonic()<deadline:
             db.session.expire_all();job=db.session.get(Job,ident)
+            state={'status':job.status,'message':job.message}
+            if not observed or observed[-1]!=state:observed.append(state)
             if job.status not in ('queued','running'):break
             time.sleep(.1)
         db.session.expire_all();job=db.session.get(Job,ident)
+        self.job_observations[ident]=observed
         assert job.status==expect,f'{job.kind}: {job.status}: {job.message}'
         viewer=self.owner_client if job.owner_id==self.owner.id else self.admin_client
         assert viewer.get(f'/vps/jobs/{job.id}').status_code==200
@@ -130,7 +136,11 @@ class NativePanel:
         """Actual guest installer/client, encrypted management key and real output link."""
         from models import GuestAccess, SSHXSession
         from services.sshx import valid_link
-        self.action('sshx_generate')
+        generated=self.action('sshx_generate')
+        self.last_sshx_job=generated.id
+        # A callable observes the actual host key AFTER boot-ready generation;
+        # no external SSH pre-wait is allowed to hide the panel's readiness gap.
+        if callable(expected_fingerprints):expected_fingerprints=expected_fingerprints()
         db.session.expire_all()
         access=db.session.get(GuestAccess,self.ident)
         assert access.host_fingerprint in expected_fingerprints
