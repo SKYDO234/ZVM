@@ -12,6 +12,7 @@ import re
 import secrets
 import sys
 import tempfile
+import time
 import uuid
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -64,6 +65,7 @@ class ProtocolFixtureEngine:
 
 with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as directory, SSHProtocolServer() as ssh:
     root = Path(directory)
+    slow_instances = set()
     def program(script):
         if script.startswith('# SKVM_FIXED_ENROLLMENT'):
             encoded = re.search(r"key=\$\(printf '%s' '([A-Za-z0-9+/=]+)'", script)[1]
@@ -74,6 +76,8 @@ with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as direct
         if mode in ('stop', 'inspect_stop'):
             return 0, 'SKVM_STOPPED\n'
         ident = re.search(r"^vm='([a-f0-9-]+)'", script, re.M)[1]
+        if ident in slow_instances and mode == 'generate':
+            time.sleep(4)  # Synthetic protocol delay, not a guest/installer.
         return 0, 'SKVM_RUNNING\nSKVM_SECONDS:3600\nLink: https://sshx.io/s/ui-protocol-' + ident.replace('-', '') + '#SyntheticUIKey0001\n'
     ssh.program = program
     engine = ProtocolFixtureEngine()
@@ -107,6 +111,14 @@ with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as direct
                         db.session.add(GuestAccess(instance_id=instance.id,
                                                    private_key_encrypted=encrypt({'private_key': ssh.private_key()})))
                     instances.append(instance.id)
+                polling = VPS(id=str(uuid.uuid4()), owner_id=owner.id, name='polling-' + project,
+                              engine='qemu', os_id='ubuntu-24.04', ram_mb=512, vcpus=1, disk_gb=8,
+                              username='guest', ssh_port=ssh.endpoint[1], runtime={'network_restricted': False})
+                db.session.add(polling)
+                db.session.flush()
+                slow_instances.add(polling.id)
+                db.session.add(GuestAccess(instance_id=polling.id,
+                                           private_key_encrypted=encrypt({'private_key': ssh.private_key()})))
                 lifecycle = VPS(id=str(uuid.uuid4()), owner_id=owner.id, name='lifecycle-' + project,
                                 engine='qemu', os_id='ubuntu-24.04', ram_mb=512, vcpus=1, disk_gb=8,
                                 username='guest', ssh_port=ssh.endpoint[1], runtime={'network_restricted': True})
@@ -129,6 +141,7 @@ with tempfile.TemporaryDirectory(prefix='skvm-sshx-browser-protocol-') as direct
                 db.session.flush()
                 state[project] = {'email': owner.email, 'password': password, 'other_email': other.email,
                                   'managed_id': instances[0], 'enroll_id': instances[1], 'guest_password': ssh.password,
+                                  'polling_id': polling.id,
                                   'lifecycle_id': lifecycle.id, 'blocked_id': blocked.id, 'blocked_job': request.id,
                                   'admin_email': operator.email}
             db.session.commit()

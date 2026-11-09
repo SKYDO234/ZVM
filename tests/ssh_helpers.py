@@ -21,6 +21,7 @@ class SSHProtocolServer:
         self.password = secrets.token_urlsafe(24)
         self.auth_calls, self.commands, self.scripts = [], [], []
         self.auth_delay = 0
+        self.exec_delay = 0  # Protocol-only delayed acknowledgement; no shell runs.
         self.program = program or (lambda script: (0, 'fixture script received\n'))
         self.transports = []
         self.stop_event = threading.Event()
@@ -74,6 +75,8 @@ class SSHProtocolServer:
             def check_channel_exec_request(self, channel, command):
                 state.commands.append(command)
                 if command != b'sh -s':
+                    return False
+                if state.exec_delay and state.stop_event.wait(state.exec_delay):
                     return False
                 execute.set()
                 return True

@@ -10,6 +10,7 @@ import hashlib
 import logging
 import re
 import socket
+import threading
 import time
 import uuid
 
@@ -158,19 +159,62 @@ class GuestSSH:
                 self.transport.auth_handler.private_key = None
             auth.clear()
 
+    def _request_exec(self, channel, deadline):
+        """Bound Paramiko's acknowledgement wait, which ignores settimeout().
+
+        Only the SSH protocol request runs on this short-lived thread; database
+        authority checks remain in the calling application thread. Closing the
+        channel wakes Paramiko's event waiter, never an unbounded executor join.
+        """
+        done, failures = threading.Event(), []
+
+        def request():
+            try:
+                channel.exec_command('sh -s')
+            except Exception as exc:
+                failures.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=request, daemon=True, name='skvm-guest-exec-ack')
+        thread.start()
+        try:
+            while True:
+                self.check()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise UncertainError('The guest command request timed out before acknowledgement. Its outcome is unknown; inspect before retrying.')
+                if done.wait(min(.05, remaining)):
+                    if failures:
+                        raise failures[0]
+                    return
+        finally:
+            if not done.is_set():
+                channel.close()
+            thread.join(timeout=.2)
+
     def execute(self, script, seconds=120):
-        """Fixed scripts via stdin; never sh -c with browser data or a host subprocess."""
+        """One total deadline, including channel setup and exec acknowledgement."""
         channel, started = None, False
+        end = time.monotonic() + seconds
         try:
             self.check()
             QemuEngine().ssh_endpoint(self.spec)
-            channel = self.transport.open_session(timeout=5)
-            channel.settimeout(3)
-            channel.exec_command('sh -s')
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                raise EngineError('Guest command setup timed out before submission. No command was sent.')
+            channel = self.transport.open_session(timeout=min(5, remaining))
+            channel.settimeout(min(3, max(.01, end - time.monotonic())))
+            # Once submitted, a lost acknowledgement is NOT proof of failure.
             started = True
+            self._request_exec(channel, min(end, time.monotonic() + 10))
+            self.check()
+            if time.monotonic() >= end:
+                raise UncertainError('The guest command timed out after submission. Its outcome is unknown; inspect before retrying.')
+            channel.settimeout(min(3, end - time.monotonic()))
             channel.sendall(script.encode())
             channel.shutdown_write()
-            end, output = time.monotonic() + seconds, bytearray()
+            output = bytearray()
             while True:
                 self.check()
                 for ready, receive in ((channel.recv_ready, channel.recv), (channel.recv_stderr_ready, channel.recv_stderr)):

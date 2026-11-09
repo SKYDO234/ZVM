@@ -2,6 +2,7 @@
 import base64
 import io
 import logging
+import time
 import uuid
 from unittest.mock import Mock
 
@@ -59,6 +60,19 @@ def test_fixed_command_uses_real_ssh_auth_and_stdin_no_pty(guest, ssh_server, me
     assert ssh_server.scripts == ['# fixed test protocol only\n']
     assert QemuEngine.ssh_endpoint.call_count == 4
     assert ssh_server.auth_calls[-1][1] == 'guest'
+
+
+def test_command_deadline_includes_a_stalled_exec_acknowledgement(guest, ssh_server):
+    # Channel.settimeout does not bound Paramiko's exec acknowledgement wait.
+    # The fixture delays only the SSH protocol response; it executes no shell.
+    ssh_server.exec_delay = .4
+    with GuestSSH(guest, fingerprint(ssh_server.key)) as connection:
+        connection.authenticate({'method': 'key', 'private_key': ssh_server.private_key()})
+        started = time.monotonic()
+        with pytest.raises(UncertainError, match='timed out|outcome|unknown'):
+            connection.execute('# fixed protocol deadline regression\n', seconds=.1)
+        assert time.monotonic() - started < .8
+    assert ssh_server.commands == [b'sh -s']
 
 
 @pytest.mark.parametrize('kind', ['ed25519', 'rsa', 'ecdsa'])

@@ -3,6 +3,7 @@
 Stopping drains the current job; it never kills guests or retries operations.
 The same application can be started/stopped safely by WSGI hooks and test hosts.
 """
+import logging
 import threading
 import time
 
@@ -36,3 +37,25 @@ def stop_background(app,timeout=10):
     if stopped:
         with _registry_lock:app.extensions['skvm_background_stopping']=False
     return stopped
+
+
+def run_elected(app, name, stop_event, consume):
+    """Remain a standby, and recover after a leader/startup failure.
+
+    A file lock, not a heartbeat/age heuristic, grants exclusive consumption.
+    Losing the election never resets work or disables the standby permanently.
+    """
+    from extensions import db
+    from services.security import locked
+    with app.app_context():
+        while not stop_event.is_set():
+            try:
+                with locked(name, blocking=False):
+                    consume(stop_event)
+            except BlockingIOError:
+                pass
+            except Exception:
+                logging.exception('Queue consumer %s stopped unexpectedly; retrying election', name)
+            finally:
+                db.session.remove()
+            stop_event.wait(.25)
