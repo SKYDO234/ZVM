@@ -46,6 +46,13 @@ class GuestSSHNotReadyError(GuestSSHRetryableError):
         super().__init__('The VM’s verified SSH service is not ready yet. Wait for guest boot/cloud-init and check sshd. No guest credentials or command were sent.')
 
 
+class GuestSSHChannelNotReadyError(GuestSSHRetryableError):
+    code = 'guest_ssh_channel_not_ready'
+
+    def __init__(self):
+        super().__init__('Guest SSH authenticated, but its command channel is not ready. No guest command was submitted; wait for boot/cloud-init/sshd to settle.')
+
+
 class GuestSSHBusyError(GuestSSHRetryableError):
     code = 'guest_ssh_busy'
 
@@ -53,7 +60,7 @@ class GuestSSHBusyError(GuestSSHRetryableError):
         super().__init__('Guest SSH admission/rate limit reached. Wait one minute and retry.')
 
 
-SSH_RETRY_ERRORS = {error.code: error for error in (GuestSSHNotReadyError, GuestSSHBusyError)}
+SSH_RETRY_ERRORS = {error.code: error for error in (GuestSSHNotReadyError, GuestSSHChannelNotReadyError, GuestSSHBusyError)}
 
 
 def new_key():
@@ -276,10 +283,15 @@ class GuestSSH:
             raise
         except EngineError:
             raise
-        except Exception:
+        except Exception as exc:
             if started:
                 raise UncertainError('The guest connection ended after command submission. Inspect its outcome before retrying.') from None
-            raise EngineError('Cannot open a guest SSH command channel.') from None
+            # SSH channel-open confirmation can lag successful authentication
+            # under a cold TCG boot. There is still no exec request or script to
+            # replay here. Identity/authority failures were handled above.
+            if isinstance(exc, (OSError, EOFError, paramiko.SSHException)):
+                raise GuestSSHChannelNotReadyError() from None
+            raise EngineError('Cannot open a guest SSH command channel before command submission.') from None
         finally:
             if channel:
                 channel.close()

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import socket
 from unittest.mock import Mock
 
+import paramiko
 import pytest
 
 from engines import EngineError, UncertainError
@@ -16,7 +17,7 @@ from models import GuestAccess, GuestLease, Job, SSHXSession
 from models.user import utcnow
 from services.background import stop_background
 from services.guest_access import GuestAuthorityError
-from services.guest_ssh import GuestSSHBusyError, GuestSSHNotReadyError
+from services.guest_ssh import GuestSSHBusyError, GuestSSHChannelNotReadyError, GuestSSHNotReadyError
 from services.job_control import cancel_queued
 from services.provisioning import process_job, queue_action, start_worker
 from services.security import decrypt, encrypt
@@ -25,7 +26,7 @@ from tests.test_sshx import PIN, SYNTHETIC_LINK, access, vm
 from tests.test_sshx_queue import guest_boundary, wait_status
 
 
-@pytest.mark.parametrize('failure', ['tcp_refused', 'banner_reset'])
+@pytest.mark.parametrize('failure', ['tcp_refused', 'banner_reset', 'channel_timeout'])
 def test_generate_waits_for_guest_boot_without_replaying_the_installer(app, users, monkeypatch, failure):
     with SSHProtocolServer(lambda script: (0, 'SKVM_RUNNING\nSKVM_SECONDS:60\n' + SYNTHETIC_LINK + '\n')) as server:
         # This is the only VM identity boundary replacement; SSH KEX/auth/exec
@@ -39,7 +40,7 @@ def test_generate_waits_for_guest_boot_without_replaying_the_installer(app, user
         ciphertext = saved.private_key_encrypted
         if failure == 'banner_reset':
             server.unready_connections = 1
-        else:
+        elif failure == 'tcp_refused':
             original = socket.create_connection
             attempts = []
 
@@ -51,15 +52,31 @@ def test_generate_waits_for_guest_boot_without_replaying_the_installer(app, user
                 return original(address, *args, **kwargs)
 
             monkeypatch.setattr('services.guest_ssh.socket.create_connection', refuse_once)
+        else:
+            original = paramiko.Transport.open_session
+            attempts = []
+
+            def bounded_channel(transport, *args, **kwargs):
+                attempts.append(True)
+                if len(attempts) == 1:
+                    server.channel_delay = .4
+                    kwargs['timeout'] = .1
+                try:
+                    return original(transport, *args, **kwargs)
+                finally:
+                    server.channel_delay = 0
+
+            monkeypatch.setattr(paramiko.Transport, 'open_session', bounded_channel)
         now = utcnow()
         monkeypatch.setattr('services.provisioning.utcnow', lambda: now)
         ident = queue_action(users[0], instance, 'sshx_generate').id
         process_job(ident)
         db.session.expire_all()
         job = db.session.get(Job, ident)
-        assert job.status == 'queued', 'A pre-auth boot failure must wait, not permanently fail Generate'
+        assert job.status == 'queued', 'A pre-command boot failure must wait, not permanently fail Generate'
         assert 'Waiting for guest SSH' in job.message
-        assert server.auth_calls == [] and server.commands == []
+        before_auth = [('key', 'guest')] if failure == 'channel_timeout' else []
+        assert server.auth_calls == before_auth and server.commands == []
         assert db.session.get(SSHXSession, instance.id) is None
         assert db.session.scalar(db.select(db.func.count()).select_from(GuestLease)) == 0
         waiting = decrypt(job.payload)
@@ -68,14 +85,14 @@ def test_generate_waits_for_guest_boot_without_replaying_the_installer(app, user
         assert 'sshx_started_at' not in waiting
         # A not-yet-due retry must not connect or mark the job Running.
         assert process_job(ident) is False
-        assert server.auth_calls == [] and server.commands == []
+        assert server.auth_calls == before_auth and server.commands == []
         # Four minutes of boot waiting must not consume a 60-second client TTL.
         now += timedelta(minutes=4)
         process_job(ident)
         db.session.expire_all()
         job = db.session.get(Job, ident)
         assert job.status == 'completed' and job.payload is None
-        assert server.auth_calls == [('key', 'guest')]
+        assert server.auth_calls == before_auth + [('key', 'guest')]
         assert server.commands == [b'sh -s'] and len(server.scripts) == 1
         assert 'curl -sSf https://sshx.io/get | sh' in server.scripts[0]
         assert db.session.get(GuestAccess, instance.id).private_key_encrypted == ciphertext
@@ -85,7 +102,7 @@ def test_generate_waits_for_guest_boot_without_replaying_the_installer(app, user
 
 
 @pytest.mark.parametrize('kind', ['sshx_generate', 'sshx_stop'])
-@pytest.mark.parametrize('failure', [GuestSSHNotReadyError, GuestSSHBusyError])
+@pytest.mark.parametrize('failure', [GuestSSHNotReadyError, GuestSSHChannelNotReadyError, GuestSSHBusyError])
 def test_boot_wait_has_a_persistent_deadline_independent_of_queue_age(app, users, monkeypatch, kind, failure):
     instance = vm(users[0])
     access(instance)

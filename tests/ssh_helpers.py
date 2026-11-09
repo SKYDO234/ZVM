@@ -21,6 +21,7 @@ class SSHProtocolServer:
         self.password = secrets.token_urlsafe(24)
         self.auth_calls, self.commands, self.scripts = [], [], []
         self.auth_delay = 0
+        self.channel_delay = 0  # Delay channel-open confirmation, never execute a shell.
         self.unready_connections = 0  # Close before KEX to model sshd still booting.
         self.exec_delay = 0  # Protocol-only delayed acknowledgement; no shell runs.
         self.program = program or (lambda script: (0, 'fixture script received\n'))
@@ -75,6 +76,8 @@ class SSHProtocolServer:
                 return paramiko.AUTH_SUCCESSFUL if username == 'guest' and accepted else paramiko.AUTH_FAILED
 
             def check_channel_request(self, kind, chanid):
+                if state.channel_delay and state.stop_event.wait(state.channel_delay):
+                    return paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
                 return paramiko.OPEN_SUCCEEDED if kind == 'session' else paramiko.OPEN_FAILED_ADMINISTRATIVELY_PROHIBITED
 
             def check_channel_exec_request(self, channel, command):

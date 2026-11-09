@@ -142,16 +142,34 @@ def test_untrusted_node_fingerprint_result_is_not_saved(app, monkeypatch):
         sshx.dispatch(spec, 'verify', node=node, private='not-used-at-explicit-transport-boundary', host_fingerprint='SHA256:' + 'A' * 43)
 
 
-def test_tls_node_reports_boot_wait_as_a_fixed_pre_command_code(tls_guest, caplog):
-    from services.guest_ssh import GuestSSHNotReadyError
+@pytest.mark.parametrize('failure', ['handshake', 'channel'])
+def test_tls_node_reports_boot_wait_as_a_fixed_pre_command_code(tls_guest, caplog, monkeypatch, failure):
+    import paramiko
+    from services.guest_ssh import GuestSSHChannelNotReadyError, GuestSSHNotReadyError
     _, node, spec, ssh, _ = tls_guest
-    ssh.unready_connections = 1
-    with pytest.raises(GuestSSHNotReadyError):
+    expected = GuestSSHNotReadyError
+    before_auth = []
+    if failure == 'handshake':
+        ssh.unready_connections = 1
+    else:
+        expected = GuestSSHChannelNotReadyError
+        before_auth = [('key', 'guest')]
+        original = paramiko.Transport.open_session
+        calls = []
+
+        def unready_channel(transport, *args, **kwargs):
+            calls.append(True)
+            if len(calls) == 1:
+                raise paramiko.SSHException('Synthetic pre-exec channel timeout')
+            return original(transport, *args, **kwargs)
+
+        monkeypatch.setattr(paramiko.Transport, 'open_session', unready_channel)
+    with pytest.raises(expected):
         sshx.dispatch(spec, 'generate', node=node, private=ssh.private_key(), operation_id=str(uuid.uuid4()))
-    assert ssh.auth_calls == [] and ssh.commands == []
+    assert ssh.auth_calls == before_auth and ssh.commands == []
     value = sshx.dispatch(spec, 'generate', node=node, private=ssh.private_key(), operation_id=str(uuid.uuid4()))
     assert value['state'] == 'generated' and value['link'] == LINK
-    assert ssh.auth_calls == [('key', 'guest')] and ssh.commands == [b'sh -s']
+    assert ssh.auth_calls == before_auth + [('key', 'guest')] and ssh.commands == [b'sh -s']
     assert LINK not in caplog.text and TOKEN not in caplog.text
 
 
