@@ -1,6 +1,16 @@
 # Validation and compatibility boundaries
 
-## SSHX queued/running stall repair
+## Guest SSH cold-boot readiness repair
+
+- Reproduced the reported early connection-failure path in **two pre-fix regressions**: a refused pre-boot TCP connection and an SSH banner reset. Both incorrectly ended Generate as **Failed**. Their fixtures replace only the QEMU identity boundary, use real SSH KEX/auth/exec on recovery, and never execute a shell/installer or contact a real relay.
+- Added **27 readiness regressions** for safe retry, one guest-script submission, preserved keys, released leases/lane fairness, persistent expiry independent of queue age, client TTL independent of boot wait, administrator cancellation, current authority on every attempt, bounded configuration and refusal to retry identity/host-key/auth/installer/unknown outcomes. Two additional TLS-agent cases distinguish fixed pre-command readiness rejection from uncertain mutation failure.
+- Full local Python: **475 passed, 4 native skips, 1 warning in 162.48 s**. The four native skips remain missing/opt-in Docker and QEMU, not compatibility passes.
+- The real Ubuntu/TCG acceptance test has been tightened: it now queues Generate **immediately after QMP Start**, before any external SSH readiness helper, requires an actual Queued boot-readiness observation, and independently verifies the guest host key and real encrypted/displayed client link after generation. Reinstall also generates without an SSH pre-wait. Fresh equipped execution is still pending; the historical run below did pre-wait for guest SSH and is not evidence of this new cold-boot behavior.
+- Desktop/Pixel 7 browser: **20 passed in 2.7 minutes**, including a reset first SSH connection, visible Queued boot-readiness progress, live Running state, dropped status-fetch recovery, completed-link display/copy and Stop. Temporary local Chromium NSS/NSPR libraries were extracted before this successful run; no production dependency/lockfile or authentication-limit change was needed.
+- Compile, Ruff `F`, JavaScript syntax, locked asset build and diff checks passed. Fresh equipped cold-boot execution remains pending; prior native evidence below is explicitly historical.
+- [Guest readiness troubleshooting and safe upgrade](sshx.md#when-generate-fails-with-cannot-establish-verified-guest-ssh). No database/guest reset, host SSHX installation, arbitrary unlock or automatic installer replay.
+
+## Earlier SSHX queued/running stall repair
 
 - Reproduced **five failing regressions** before the fix: blocking VM-lock claims, SSHX waiting behind unrelated provisioning, a standby abandoning its queue, a new leader incorrectly relabelling live SSHX work, and the unbounded SSH command-acknowledgement wait.
 - Final local Python: **446 passed, 4 native skips, 1 warning in 174.39 s**. Additional coverage includes both queue-lane leadership takeovers and retry after a transient consumer-startup failure. Queue tests use real threads/file locks with explicitly mocked engine/guest boundaries; the SSH acknowledgement regression uses a real SSH protocol fixture without executing a shell or installer.
@@ -101,7 +111,7 @@ CI uses its installed Playwright Chromium. Where an equipped local Chromium is a
 
 ### Real Ubuntu / QEMU / SSHX
 
-**Current equipped acceptance:** [run 42582152859](https://github.com/SKYDO234/ZVM/actions/runs/42582152859), application/test source `30d5af4830986fe6ffa0f433743cf1417a6cd932`, completed all six jobs successfully. The full-OS check reported **1 case, 0 failures/errors, 0 skipped**. It proves read-only closure of deliberately interrupted power-request metadata against the real running guest, admin assignment to a regular owner, real owner power/restart/persistence and graceful running-guest deletion alongside actual guest SSHX installation, live-link preservation on repeated Start, captured-link display, stop proof and reinstall/orphan recovery. All nine OS catalog endpoints were HTTPS/QCOW2-verified. Earlier owner/SSHX runs remain recorded as history, not substituted for this result.
+**Previous equipped acceptance (before the new cold-boot readiness repair):** [run 42582152859](https://github.com/SKYDO234/ZVM/actions/runs/42582152859), application/test source `30d5af4830986fe6ffa0f433743cf1417a6cd932`, completed all six jobs successfully. The full-OS check reported **1 case, 0 failures/errors, 0 skipped**. It proves read-only closure of deliberately interrupted power-request metadata against the real running guest, admin assignment to a regular owner, real owner power/restart/persistence and graceful running-guest deletion alongside actual guest SSHX installation, live-link preservation on repeated Start, captured-link display, stop proof and reinstall/orphan recovery. All nine OS catalog endpoints were HTTPS/QCOW2-verified. Earlier owner/SSHX runs remain recorded as history, not substituted for this result.
 
 To reproduce, install native QEMU/cloud-init/OpenSSH tools on a disposable Linux host; do not require KVM or a privileged guest container. Obtain the image checksum using the distribution-provided Ubuntu cloud-image GPG keyring:
 
@@ -131,7 +141,7 @@ Use an already accessible **local Unix** daemon with working memory/CPU controls
 SKVM_RUN_DOCKER_INTEGRATION=1 .venv/bin/python -m pytest tests/test_docker_integration.py -q -rs
 ```
 
-**Current equipped acceptance:** [run 42582152859](https://github.com/SKYDO234/ZVM/actions/runs/42582152859), source `30d5af4830986fe6ffa0f433743cf1417a6cd932`, native `docker-panel` check: **2 cases, 0 failures/errors, 0 skipped**. Admin provisioning assigns to a separate regular owner; that owner checks job-page/API access, start/stop/restart and deletion of running containers. Both local and verified-TLS agent cases also seed interrupted request context, deny owner recovery, inspect the actual running container through the administrator route, close the old request as failed/unconfirmed and retain its real allocation before continuing lifecycle.
+**Previous equipped acceptance (before the new cold-boot readiness repair):** [run 42582152859](https://github.com/SKYDO234/ZVM/actions/runs/42582152859), source `30d5af4830986fe6ffa0f433743cf1417a6cd932`, native `docker-panel` check: **2 cases, 0 failures/errors, 0 skipped**. Admin provisioning assigns to a separate regular owner; that owner checks job-page/API access, start/stop/restart and deletion of running containers. Both local and verified-TLS agent cases also seed interrupted request context, deny owner recovery, inspect the actual running container through the administrator route, close the old request as failed/unconfirmed and retain its real allocation before continuing lifecycle.
 
 Tests check real queued panel creation, 128 MiB / 1 CPU / 128 PID limits, UID 1000, no privileges/host mounts/public ports, owned internal network, actual telemetry and persistent data through lifecycle/deletion. The local case also verifies force-stop. The second case goes through a real TLS/bearer agent and both queue consumers. Direct test-only SDK diagnostics are not a public Console API.
 

@@ -54,6 +54,14 @@ class NodeEngine:
                 if isinstance(data, dict) and isinstance(data.get('error'), str):
                     data['error'] = data['error'].replace(token, '[redacted]')
                 if response.status_code >= 400:
+                    # Only an explicit authenticated pre-command rejection is
+                    # retryable. HTTP 5xx, lost responses and unknown outcomes
+                    # must retain their existing uncertain/non-replaying path.
+                    if sensitive and response.status_code == 409 and isinstance(data, dict):
+                        from services.guest_ssh import SSH_RETRY_ERRORS
+                        code = data.get('code')
+                        if isinstance(code, str) and code in SSH_RETRY_ERRORS:
+                            raise SSH_RETRY_ERRORS[code]()
                     detail = ('Guest SSH request rejected. Check guest readiness, enrollment, network policy and node version.' if sensitive else
                               (str(data.get('error', 'Request was rejected.'))[:1000] if isinstance(data, dict) else 'Request was rejected.'))
                     detail = detail.replace(token, '[redacted]')

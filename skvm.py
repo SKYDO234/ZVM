@@ -27,6 +27,8 @@ def create_app(overrides=None):
     app.config.update(overrides or {})
     if type(app.config['SSHX_MAX_SECONDS']) is not int or not 60 <= app.config['SSHX_MAX_SECONDS'] <= 3600:
         raise RuntimeError('SSHX_MAX_SECONDS must be 60–3600 seconds.')
+    if type(app.config['SSHX_READY_SECONDS']) is not int or not 60 <= app.config['SSHX_READY_SECONDS'] <= 900:
+        raise RuntimeError('SSHX_READY_SECONDS must be 60–900 seconds.')
     if any(c in str(app.config['DATA_DIR']) for c in (',', '\n', '\r', '\x00')):
         raise RuntimeError('SKVM_DATA_DIR cannot contain QEMU option separators or control characters.')
     for folder in ('vms', 'images', 'logs', 'locks'):

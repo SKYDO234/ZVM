@@ -21,6 +21,7 @@ class SSHProtocolServer:
         self.password = secrets.token_urlsafe(24)
         self.auth_calls, self.commands, self.scripts = [], [], []
         self.auth_delay = 0
+        self.unready_connections = 0  # Close before KEX to model sshd still booting.
         self.exec_delay = 0  # Protocol-only delayed acknowledgement; no shell runs.
         self.program = program or (lambda script: (0, 'fixture script received\n'))
         self.transports = []
@@ -46,6 +47,10 @@ class SSHProtocolServer:
                 continue
             except OSError:
                 break
+            if self.unready_connections:
+                self.unready_connections -= 1
+                peer.close()
+                continue
             threading.Thread(target=self._serve, args=(peer,), daemon=True).start()
 
     def _serve(self, peer):

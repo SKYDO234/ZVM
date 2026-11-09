@@ -8,11 +8,27 @@ The former Console, WebSSH pages/APIs and WebSocket transports have been removed
 2. For SSHX, select a **QEMU VM**. Select **Outbound internet** and explicitly acknowledge its network implications, or leave restricted networking enabled. The global default remains unchanged.
 3. Supply the owner's normal guest public key or password. The panel also generates a **unique Ed25519 management key** for this VM. Only its public key enters cloud-init; the private key stays Fernet-encrypted on the panel.
 4. Review the **selected owner's plan**, network policy and resources, then confirm. Pending/uncertain creation and incoming assignment jobs reserve the **target owner's** quota, not the requesting administrator's. The worker rechecks the administrator, assigned account, quotas and actual node capacity.
-5. A real created instance initially remains **stopped**. Start it and wait for cloud-init and the SSH service.
+5. A real created instance initially remains **stopped**. Start it, then Generate SSHX. QMP **Running** proves the emulator is running, not that the guest has finished booting; the queued SSHX request now handles bounded SSH readiness waiting automatically.
 
 Normal users cannot access creation/review confirmation or assignment operations. They have a separate **My workspace** at `/user`, listing only their assigned VPS. They retain owner power, resize, reinstall and delete permissions with confirmations and backend ownership checks. Details/My VPS show state-aware power controls and a visible Delete action: deletion of a running VPS requests and verifies graceful shutdown first, without an automatic Force stop. Already-running Start is a verified no-op and preserves its live SSHX link.
 
 An administrator can reassign an existing **stopped QEMU VM** from Advanced controls. The target account must be enabled and have quota. This preserves guest disk data and does **not** rotate its native SSH passwords/keys: review those credentials before transferring a guest between people. The stopped guest cannot retain a running SSHX client. New container ownership is selected at creation; reassignment of existing Docker instances is intentionally not implemented.
+
+## When Generate fails with “Cannot establish verified guest SSH”
+
+That error occurs **before the SSHX installer**: the QEMU process may already be Running while Linux, cloud-init, networking or sshd is still starting. This is particularly common during the first software-emulated TCG boot. The former Generate path made one five-second TCP / ten-second SSH-handshake attempt, so an early click could fail even though the guest would become ready later.
+
+Generate/Stop now retain the **same job** and automatically retry only failures proven to occur **before a guest command**: connection refusal/reset/timeout or an incomplete SSH handshake, plus temporary admission limits. Between attempts the job is **Queued** with “Waiting for guest SSH”, its next-retry interval and remaining boot-readiness budget. A readiness attempt briefly shows **Running**. The execution/VM locks and admission lease are released after a failed pre-command attempt so other eligible VMs can proceed; nothing holds the SSHX worker for the whole boot window.
+
+- Default readiness window: **600 seconds** from the first worker attempt, independent of time spent waiting in the queue. `SKVM_SSHX_READY_SECONDS` accepts **60–900**. Its deadline is retained in the encrypted job context, not reset by another DB session/worker or a changed setting. Each individual connection/handshake remains bounded.
+- Automatic retries normally wait **15 seconds**. Existing global/per-user connection and rate limits are unchanged; reaching them defers the request instead of bypassing them. The future client lifetime starts with its actual execution attempt, not with the first failed boot connection.
+- **Never boot-retried:** an unproven QEMU endpoint, host-key mismatch, rejected guest credentials, revoked ownership/session, failed installer, potentially submitted command, lost node response or an uncertain outcome. Authentication failure now points to **Repair management access** using the existing guest credential. It does not reset the password or replace the saved key automatically.
+- On deadline expiry, the job fails explicitly and confirms **no SSHX guest command was sent by this request**. Check the VM’s actual boot/cloud-init/sshd status and managed forward using your existing native SSH/operator recovery access. After fixing those, Generate again. Do not repeatedly reinstall/reset the VPS or install SSHX on the panel host.
+- An administrator can cancel a released **Queued** readiness retry in **Recovery**. Running/uncertain work still cannot be cancelled. Cancelling/hiding a request does not stop an older SSHX client or revoke its copied link.
+
+Update/restart all panel workers and external agents to use this behavior. The authenticated agent returns only fixed pre-command retry codes; HTTP 5xx/network loss/unknown outcomes retain their conservative non-replaying handling. There is no external-node-to-localhost fallback. Existing failed jobs remain failed; after upgrading, submit a new Generate request. Existing **uncertain** jobs still require Recovery inspection or verified VM shutdown.
+
+This wait concerns SSH connection readiness, not a promise that an unsupported/EOL guest finished all optional package setup. A prerequisite, network-policy or installer error remains explicit; see [guest prerequisites](#network-policy-and-prerequisites).
 
 ## When Generate SSHX stays queued or running
 

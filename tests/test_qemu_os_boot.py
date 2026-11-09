@@ -80,8 +80,12 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         report['phase']='disk-and-seed-created'
         panel.action('start');data=panel.spec()
         assert panel.metrics()['status']=='running'
-        report['phase']='qmp-running'
-        _wait_for_ssh(key,data['ssh_port']);report['phase']='ssh-authenticated'
+        report['phase']='qmp-running-queue-sshx-without-ssh-prewait'
+        panel.sshx(lambda: _host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command))
+        observed=panel.job_observations[panel.last_sshx_job]
+        assert any(state['status']=='queued' and 'Waiting for guest SSH' in state['message'] for state in observed), 'Actual cold boot did not exercise the panel readiness retry'
+        report['boot_readiness']={'generate_queued_immediately_after_qmp':True,'no_external_ssh_prewait':True,'safe_pre_command_retry_observed':True,'job_states':observed}
+        report['phase']='sshx-generated-from-cold-boot'
         cloud=_ssh(key,data['ssh_port'],'sudo -n cloud-init status --wait --format=json',timeout=300)
         assert cloud.returncode==0,cloud.stdout[-3000:]+cloud.stderr[-1000:]
         status=json.loads(cloud.stdout)
@@ -89,8 +93,7 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         report['phase']='cloud-init-complete'
         panel.interrupted_power_recovery()
         report['interrupted_power_context']={'actual_guest_state_verified':True,'no_action_replayed':True,'owner_recovery_denied':True}
-        report['phase']='sshx-guest-install-and-link-verification'
-        panel.sshx(_host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command))
+        report['phase']='cold-boot-sshx-and-recovery-verified'
         assert panel.metrics()['status']=='running'
         report['sshx']={'guest_installer':True,'actual_link_displayed':True,'verified_host_key':True,'client_stopped':True,'unrelated_process_preserved':True,'guest_identity':'skvmcheck'}
         report['cloud_init']={'status':status['status'],'errors':status.get('errors',[])}
@@ -127,9 +130,10 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         # Reinstall must replace only this guest, clear old data, and accept its key.
         panel.action('reinstall',{'os_id':image.id,'username':'skvmcheck','auth_method':'key','public_key':public})
         data=panel.spec();(key.parent/'known_hosts').unlink(missing_ok=True)
-        panel.action('start');_wait_for_ssh(key,data['ssh_port'])
-        report['phase']='sshx-reinstall-management-key-verification'
-        panel.sshx(_host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command), orphan=True)
+        panel.action('start')
+        report['phase']='sshx-reinstall-management-key-verification-without-ssh-prewait'
+        panel.sshx(lambda: _host_fingerprints(key,data['ssh_port']), guest=lambda command: _ssh(key,data['ssh_port'],command), orphan=True)
+        report['boot_readiness']['reinstall_queued_without_ssh_prewait']=True
         report['sshx']['reinstall_new_management_key_verified']=True
         report['sshx']['orphan_client_stopped']=True
         absent=_ssh(key,data['ssh_port'],'test ! -e ~/skvm-persistence-check')

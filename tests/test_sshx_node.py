@@ -140,3 +140,29 @@ def test_untrusted_node_fingerprint_result_is_not_saved(app, monkeypatch):
     monkeypatch.setattr(NodeEngine, 'guest_ssh', lambda *a, **kw: {'state': 'verified', 'fingerprint': 'SHA256:' + 'B' * 43})
     with pytest.raises(UncertainError, match='different guest fingerprint'):
         sshx.dispatch(spec, 'verify', node=node, private='not-used-at-explicit-transport-boundary', host_fingerprint='SHA256:' + 'A' * 43)
+
+
+def test_tls_node_reports_boot_wait_as_a_fixed_pre_command_code(tls_guest, caplog):
+    from services.guest_ssh import GuestSSHNotReadyError
+    _, node, spec, ssh, _ = tls_guest
+    ssh.unready_connections = 1
+    with pytest.raises(GuestSSHNotReadyError):
+        sshx.dispatch(spec, 'generate', node=node, private=ssh.private_key(), operation_id=str(uuid.uuid4()))
+    assert ssh.auth_calls == [] and ssh.commands == []
+    value = sshx.dispatch(spec, 'generate', node=node, private=ssh.private_key(), operation_id=str(uuid.uuid4()))
+    assert value['state'] == 'generated' and value['link'] == LINK
+    assert ssh.auth_calls == [('key', 'guest')] and ssh.commands == [b'sh -s']
+    assert LINK not in caplog.text and TOKEN not in caplog.text
+
+
+def test_tls_node_lost_mutation_outcome_is_never_a_boot_retry(tls_guest, monkeypatch):
+    from services.guest_ssh import GuestSSHRetryableError
+    _, node, spec, ssh, _ = tls_guest
+
+    def lost_response(*args, **kwargs):
+        raise UncertainError('Synthetic lost response after guest submission')
+
+    monkeypatch.setattr('services.sshx.local', lost_response)
+    with pytest.raises(UncertainError) as caught:
+        sshx.dispatch(spec, 'generate', node=node, private=ssh.private_key(), operation_id=str(uuid.uuid4()))
+    assert not isinstance(caught.value, GuestSSHRetryableError)

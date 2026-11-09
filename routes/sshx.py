@@ -46,7 +46,8 @@ def page_state(vps, metric):
     return {'access': access, 'pending': pending, 'latest': latest, 'reason': reason, 'session': visible,
             'can_stop': bool(access and metric['status'] == 'running' and not vps.suspended and not pending
                              and current_app.config['SSHX_ENABLED'] and not current_app.config['TEST_MODE']),
-            'max_minutes': current_app.config['SSHX_MAX_SECONDS'] // 60}
+            'max_minutes': current_app.config['SSHX_MAX_SECONDS'] // 60,
+            'ready_minutes': (current_app.config['SSHX_READY_SECONDS'] + 59) // 60}
 
 
 @bp.post('/<ident>/sshx/generate')
