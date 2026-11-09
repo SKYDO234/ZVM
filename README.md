@@ -1,5 +1,11 @@
 # SKVM · QEMU + Docker VPS control panel
 
+<p align="center">
+  <img src="docs/assets/zk-studios-logo.png" alt="ZK STUDIOS logo" width="280">
+</p>
+
+**This panel is made by ZK STUDIOS.**
+
 A workspace-first Flask management panel for **real QEMU virtual machines** and **separate Docker OS containers**. Dark responsive interface, live measured charts, user accounts, quotas, audit trails, background provisioning, and an authenticated external-node agent.
 
 **No LXC. No systemd requirement. No privileged guest containers. No required KVM. No simulated VPS records.**
