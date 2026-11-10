@@ -35,6 +35,26 @@ SSH_LOGGER.propagate = False
 FINGERPRINT = re.compile(r'SHA256:[A-Za-z0-9+/]{43}')
 
 
+# One setup budget accommodates a CPU-constrained TCG guest without repeatedly
+# throwing away valid KEX/auth/channel work. The total request remains below the
+# 175s node read timeout, 180s admission lease and 180s reverse-proxy timeout.
+SSH_SETUP_SECONDS = 40
+SSH_HANDSHAKE_SECONDS = 25
+SSH_AUTH_SECONDS = 20
+SSH_CHANNEL_SECONDS = 15
+SSH_REQUEST_SECONDS = 170
+
+READINESS_STAGES = {
+    'connect': 'the managed SSH TCP connection is not accepting connections',
+    'banner': 'the guest has not returned its SSH greeting',
+    'key_exchange': 'the guest SSH key exchange has not finished',
+    'handshake': 'the guest SSH handshake has not finished',
+    'authentication': 'the guest has not answered SSH authentication',
+    'channel': 'SSH authenticated, but the guest has not opened a command channel',
+    'admission': 'connection admission is busy; concurrency/rate limits remain enforced',
+}
+
+
 class GuestSSHRetryableError(EngineError):
     """Proven pre-command failure, never an uncertain guest mutation."""
 
@@ -42,12 +62,24 @@ class GuestSSHRetryableError(EngineError):
 class GuestSSHNotReadyError(GuestSSHRetryableError):
     code = 'guest_ssh_not_ready'
 
+    def __init__(self, stage='handshake'):
+        self.stage = stage if stage in ('connect', 'banner', 'key_exchange', 'handshake') else 'handshake'
+        super().__init__('The VM’s verified SSH service is not ready yet: ' + READINESS_STAGES[self.stage]
+                         + '. No guest credentials or command were sent.')
+
+
+class GuestSSHAuthenticationNotReadyError(GuestSSHRetryableError):
+    code = 'guest_ssh_auth_not_ready'
+    stage = 'authentication'
+
     def __init__(self):
-        super().__init__('The VM’s verified SSH service is not ready yet. Wait for guest boot/cloud-init and check sshd. No guest credentials or command were sent.')
+        super().__init__('The guest has not answered SSH authentication before the setup deadline. '
+                         'This is not an explicit key/password rejection. No guest command was submitted.')
 
 
 class GuestSSHChannelNotReadyError(GuestSSHRetryableError):
     code = 'guest_ssh_channel_not_ready'
+    stage = 'channel'
 
     def __init__(self):
         super().__init__('Guest SSH authenticated, but its command channel is not ready. No guest command was submitted; wait for boot/cloud-init/sshd to settle.')
@@ -55,12 +87,20 @@ class GuestSSHChannelNotReadyError(GuestSSHRetryableError):
 
 class GuestSSHBusyError(GuestSSHRetryableError):
     code = 'guest_ssh_busy'
+    stage = 'admission'
 
     def __init__(self):
         super().__init__('Guest SSH admission/rate limit reached. Wait one minute and retry.')
 
 
-SSH_RETRY_ERRORS = {error.code: error for error in (GuestSSHNotReadyError, GuestSSHChannelNotReadyError, GuestSSHBusyError)}
+SSH_RETRY_ERRORS = {error.code: error for error in (GuestSSHNotReadyError, GuestSSHAuthenticationNotReadyError,
+                                                   GuestSSHChannelNotReadyError, GuestSSHBusyError)}
+
+
+def retry_error(code, stage=None):
+    """Decode only authenticated, whitelisted pre-command errors, not raw text."""
+    error = SSH_RETRY_ERRORS[code]
+    return error(stage) if error is GuestSSHNotReadyError else error()
 
 
 def new_key():
@@ -141,6 +181,10 @@ class GuestSSH:
             raise EngineError('Invalid saved guest host fingerprint.')
         self.spec, self.check = dict(spec), check
         self.sock, self.transport = None, None
+        now = time.monotonic()
+        self.setup_deadline = now + SSH_SETUP_SECONDS
+        self.request_deadline = now + SSH_REQUEST_SECONDS
+        stage = 'connect'
         try:
             check()
             endpoint = QemuEngine().ssh_endpoint(spec)
@@ -149,10 +193,21 @@ class GuestSSH:
             self.sock = socket.create_connection(('127.0.0.1', endpoint[1]), timeout=5)
             self.transport = paramiko.Transport(self.sock)
             self.transport.set_log_channel(SSH_LOGGER.name)
-            self.transport.banner_timeout = self.transport.auth_timeout = 10
-            self.transport.start_client(timeout=10)
-            if not self.transport.is_active() or not self.transport.remote_version:
-                raise GuestSSHNotReadyError()
+            self.transport.banner_timeout = self.transport.handshake_timeout = SSH_HANDSHAKE_SECONDS
+            self.transport.auth_timeout = SSH_AUTH_SECONDS
+            stage = 'handshake'
+            done = threading.Event()
+            # start_client(timeout=...) may return while KEX is still in flight.
+            # Wait for its completion event instead, with fresh authority checks.
+            self.transport.start_client(event=done)
+            end = min(self.setup_deadline, time.monotonic() + SSH_HANDSHAKE_SECONDS)
+            finished = self._wait(done, end)
+            stage = 'key_exchange' if self.transport.remote_version else 'banner'
+            if not finished or not self.transport.is_active() or not self.transport.initial_kex_done:
+                failure = self.transport.get_exception()
+                if failure is not None:
+                    raise failure
+                raise GuestSSHNotReadyError(stage)
             check()
             QemuEngine().ssh_endpoint(spec)  # Re-prove the listener after the handshake.
             self.fingerprint = fingerprint(self.transport.get_remote_server_key())
@@ -165,29 +220,61 @@ class GuestSSH:
             self.close()
             raise EngineError('The guest SSH service has no compatible key-exchange or host-key algorithm. Upgrade its SSH configuration; no credentials or command were sent.') from None
         except (OSError, EOFError, paramiko.SSHException):
+            if self.transport and stage != 'connect':
+                stage = 'key_exchange' if self.transport.remote_version else 'banner'
             self.close()
-            raise GuestSSHNotReadyError() from None
+            raise GuestSSHNotReadyError(stage) from None
         except Exception:
             self.close()
             raise EngineError('Cannot establish verified guest SSH before authentication. Check its guest SSH service and managed forward. No guest command was sent.') from None
 
+    def _wait(self, event, deadline):
+        """Wait only for SSH protocol events; never sleep through authority loss."""
+        while True:
+            self.check()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if event.wait(min(.1, remaining)):
+                return True
+
     def authenticate(self, auth):
         auth = credentials(auth)
+        rejected = ('Guest SSH authentication failed. Use the guest account credentials, not your panel password. '
+                    'If a saved management key was rejected, use Repair management access with the existing guest credential; no VPS reset is needed.')
         try:
             self.check()
             QemuEngine().ssh_endpoint(self.spec)
+            end = min(self.setup_deadline, time.monotonic() + SSH_AUTH_SECONDS)
+            if end <= time.monotonic():
+                raise GuestSSHAuthenticationNotReadyError()
+            done = threading.Event()
             if auth['method'] == 'password':
-                self.transport.auth_password(self.spec['username'], auth['password'], fallback=False)
+                self.transport.auth_password(self.spec['username'], auth['password'], event=done, fallback=False)
             else:
-                self.transport.auth_publickey(self.spec['username'], private_key(auth))
+                self.transport.auth_publickey(self.spec['username'], private_key(auth), event=done)
+            if not self._wait(done, end):
+                raise GuestSSHAuthenticationNotReadyError()
             if not self.transport.is_authenticated():
-                raise EngineError('Guest SSH authentication failed.')
+                failure = self.transport.get_exception()
+                if failure is not None:
+                    raise failure
+                raise EngineError(rejected)
             self.check()
         except (EngineError, SSHError):
             raise
+        except paramiko.AuthenticationException:
+            # A real SSH USERAUTH_FAILURE is terminal, never a boot retry.
+            raise EngineError(rejected) from None
+        except (OSError, EOFError, paramiko.SSHException):
+            # The authentication exchange ended without an explicit rejection;
+            # no channel/exec request or script has been sent.
+            raise GuestSSHAuthenticationNotReadyError() from None
         except Exception:
-            raise EngineError('Guest SSH authentication failed. Use the guest account credentials, not your panel password. If a saved management key was rejected, use Repair management access with the existing guest credential; no VPS reset is needed.') from None
+            raise EngineError(rejected) from None
         finally:
+            if not self.transport.is_authenticated():
+                self.close()  # Stop in-flight auth before clearing its references.
             if self.transport and self.transport.auth_handler:
                 self.transport.auth_handler.password = None
                 self.transport.auth_handler.private_key = None
@@ -230,15 +317,21 @@ class GuestSSH:
     def execute(self, script, seconds=120):
         """One total deadline, including channel setup and exec acknowledgement."""
         channel, started = None, False
-        end = time.monotonic() + seconds
+        end = min(time.monotonic() + seconds, self.request_deadline)
         try:
             self.check()
             QemuEngine().ssh_endpoint(self.spec)
             remaining = end - time.monotonic()
             if remaining <= 0:
                 raise EngineError('Guest command setup timed out before submission. No command was sent.')
-            channel = self.transport.open_session(timeout=min(5, remaining))
+            setup_remaining = self.setup_deadline - time.monotonic()
+            if setup_remaining <= 0:
+                raise GuestSSHChannelNotReadyError()
+            channel = self.transport.open_session(timeout=min(SSH_CHANNEL_SECONDS, remaining, setup_remaining))
             channel.settimeout(min(3, max(.01, end - time.monotonic())))
+            self.check()  # Authority may have changed during a slow channel open.
+            if time.monotonic() >= min(end, self.setup_deadline):
+                raise GuestSSHChannelNotReadyError()
             # Once submitted, a lost acknowledgement is NOT proof of failure.
             started = True
             self._request_exec(channel, min(end, time.monotonic() + 10))
