@@ -37,12 +37,14 @@ FINGERPRINT = re.compile(r'SHA256:[A-Za-z0-9+/]{43}')
 
 # One setup budget accommodates a CPU-constrained TCG guest without repeatedly
 # throwing away valid KEX/auth/channel work. The total request remains below the
-# 175s node read timeout, 180s admission lease and 180s reverse-proxy timeout.
+# 175s node read timeout and 180s reverse-proxy timeout. The admission lease
+# also covers the panel's capability lookup, TLS connect and response overhead.
 SSH_SETUP_SECONDS = 40
 SSH_HANDSHAKE_SECONDS = 25
 SSH_AUTH_SECONDS = 20
 SSH_CHANNEL_SECONDS = 15
 SSH_REQUEST_SECONDS = 170
+SSH_LEASE_SECONDS = 240
 
 READINESS_STAGES = {
     'connect': 'the managed SSH TCP connection is not accepting connections',
@@ -164,7 +166,7 @@ def admission(principal, ident):
             raise GuestSSHBusyError()
         db.session.add(AuthAttempt(fingerprint=tag))
         db.session.add(GuestLease(id=lease, principal=principal, instance_id=ident,
-                                  expires_at=now + timedelta(seconds=180)))
+                                  expires_at=now + timedelta(seconds=SSH_LEASE_SECONDS)))
         db.session.commit()
     try:
         yield

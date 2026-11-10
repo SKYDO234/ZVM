@@ -376,9 +376,12 @@ def test_retry_stage_is_an_enum_never_raw_remote_output(stage):
 
 
 def test_request_budget_fits_the_existing_admission_and_proxy_bounds():
-    from engines.node_engine import GUEST_RESPONSE_SECONDS
-    from services.guest_ssh import SSH_SETUP_SECONDS, SSH_REQUEST_SECONDS
+    from engines.node_engine import GUEST_RESPONSE_SECONDS, RESPONSE_SECONDS
+    from services.guest_ssh import SSH_LEASE_SECONDS, SSH_SETUP_SECONDS, SSH_REQUEST_SECONDS
     assert SSH_SETUP_SECONDS + 130 <= SSH_REQUEST_SECONDS < GUEST_RESPONSE_SECONDS < 180
+    # Include capability-response and TLS-connect overhead before the panel
+    # gets to wait for the agent; a live request must not lose its admission.
+    assert RESPONSE_SECONDS + 3 + 5 + GUEST_RESPONSE_SECONDS < SSH_LEASE_SECONDS
 
 
 def test_setup_expiry_after_channel_open_prevents_even_an_exec_request(app, monkeypatch):
