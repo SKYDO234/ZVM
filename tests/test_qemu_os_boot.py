@@ -31,7 +31,7 @@ def _ssh(key,port,command,timeout=30):
     return subprocess.run(['ssh','-T','-i',str(key),'-p',str(port),'-o','BatchMode=yes','-o','IdentitiesOnly=yes',
                            '-o','StrictHostKeyChecking=accept-new','-o',f'UserKnownHostsFile={key.parent/"known_hosts"}',
                            '-o','LogLevel=ERROR','-o','ConnectTimeout=5','-o','ConnectionAttempts=1',
-                           '-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2','skvmcheck@127.0.0.1',command],
+                           '-o','ServerAliveInterval=5','-o','ServerAliveCountMax=2','ubuntu@127.0.0.1',command],
                           capture_output=True,text=True,timeout=timeout,check=False)
 
 
@@ -48,7 +48,7 @@ def _wait_for_ssh(key,port,deadline=420):
     while time.monotonic()<end:
         try:
             result=_ssh(key,port,'id -un',timeout=15)
-            if result.returncode==0 and result.stdout.strip()=='skvmcheck':return
+            if result.returncode==0 and result.stdout.strip()=='ubuntu':return
             reason=result.stderr[-600:]
         except subprocess.TimeoutExpired:
             reason='SSH handshake timed out.'
@@ -65,15 +65,17 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
     image=db.session.get(OSImage,'ubuntu-24.04');image.sha256=pin;db.session.commit()
     engine=QemuEngine();panel=NativePanel(app)
     data={'id':str(uuid.uuid4()),'owner_id':panel.owner.id,'name':'skvm-real-boot','engine':'qemu','os_id':image.id,
-          'ram_mb':768,'vcpus':1,'disk_gb':10,'username':'skvmcheck','ssh_port':allocate_port(),
+          'ram_mb':768,'vcpus':1,'disk_gb':10,'username':'ubuntu','ssh_port':allocate_port(),
           'runtime':{},'forwards':[]}
     report={'test':'real Ubuntu 24.04 boot','started_at':datetime.now(timezone.utc).isoformat(),'phase':'preflight','passed':False,'image_sha256':pin,'accel':'tcg','allocation':{'ram_mb':768,'vcpus':1,'disk_gb':10}}
     key=root/'disposable-client-key'
     try:
         subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',str(key)],check=True,capture_output=True)
         public=ssh_key(key.with_suffix('.pub').read_text())
+        # Cover the image's pre-existing default ubuntu account, as in the
+        # reported VPS, rather than testing only a brand-new guest username.
         data=panel.create({'name':data['name'],'engine':'qemu','os_id':image.id,'ram_mb':768,'vcpus':1,'disk_gb':10,
-                           'username':'skvmcheck','ssh_port':data['ssh_port'],'auth_method':'key','public_key':public,'network_mode':'internet','accept_network_risk':'1'})
+                           'username':'ubuntu','ssh_port':data['ssh_port'],'auth_method':'key','public_key':public,'network_mode':'internet','accept_network_risk':'1'})
         assert panel.metrics()['status']=='stopped' and data['runtime']['accel']=='tcg'
         # This also validates native qemu-img check and a real cloud-localds CIDATA seed.
         assert inspect_outcome('create',data,{'spec':data},engine)['status']=='stopped'
@@ -95,10 +97,10 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         report['interrupted_power_context']={'actual_guest_state_verified':True,'no_action_replayed':True,'owner_recovery_denied':True}
         report['phase']='cold-boot-sshx-and-recovery-verified'
         assert panel.metrics()['status']=='running'
-        report['sshx']={'guest_installer':True,'actual_link_displayed':True,'verified_host_key':True,'client_stopped':True,'unrelated_process_preserved':True,'guest_identity':'skvmcheck'}
+        report['sshx']={'guest_installer':True,'actual_link_displayed':True,'verified_host_key':True,'client_stopped':True,'unrelated_process_preserved':True,'guest_identity':'ubuntu'}
         report['cloud_init']={'status':status['status'],'errors':status.get('errors',[])}
         guest=_ssh(key,data['ssh_port'],"id -un; getconf _NPROCESSORS_ONLN; grep '^MemTotal:' /proc/meminfo; cat /etc/os-release")
-        assert guest.returncode==0 and guest.stdout.splitlines()[:2]==['skvmcheck','1']
+        assert guest.returncode==0 and guest.stdout.splitlines()[:2]==['ubuntu','1']
         assert 640*1024 <= int(guest.stdout.splitlines()[2].split()[1]) <= 768*1024
         assert 'ID=ubuntu' in guest.stdout and 'VERSION_ID="24.04"' in guest.stdout
         marker='persist-'+uuid.uuid4().hex
@@ -128,7 +130,7 @@ def test_real_ubuntu_cloud_init_ssh_and_persistence(app):
         report['owner_restart_verified']=True
         panel.action('stop')
         # Reinstall must replace only this guest, clear old data, and accept its key.
-        panel.action('reinstall',{'os_id':image.id,'username':'skvmcheck','auth_method':'key','public_key':public})
+        panel.action('reinstall',{'os_id':image.id,'username':'ubuntu','auth_method':'key','public_key':public})
         data=panel.spec();(key.parent/'known_hosts').unlink(missing_ok=True)
         panel.action('start')
         report['phase']='sshx-reinstall-management-key-verification-without-ssh-prewait'

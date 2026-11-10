@@ -79,8 +79,8 @@ async function verifyPollingRecovery(page, account) {
   await page.goto(`/vps/${account.polling_id}#sshx`);
   await page.getByRole('button',{name:'Generate SSHX',exact:true}).click();
   await page.locator('#accept-confirm').click();
-  await expect(page.locator('[data-sshx-state]')).toHaveText('Queued',{timeout:10000});
-  await expect(page.locator('[data-sshx-message]')).toContainText('Waiting for guest SSH');
+  await expect(page.locator('[data-sshx-state]')).toHaveText('Waiting for guest SSH',{timeout:10000});
+  await expect(page.locator('[data-sshx-message]')).toContainText('the guest has not returned its SSH greeting (attempt 1)');
   await expect(page.getByRole('button',{name:'Generate SSHX',exact:true})).toBeDisabled();
   await expect(page.locator('#sshx-link')).toHaveCount(0);
   await expect(page.locator('[data-sshx-state]')).toHaveText('Running',{timeout:30000});

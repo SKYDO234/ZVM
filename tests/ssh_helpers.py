@@ -8,7 +8,6 @@ import io
 import secrets
 import socket
 import threading
-import time
 
 import paramiko
 
@@ -20,6 +19,7 @@ class SSHProtocolServer:
         self.extra_keys = set()
         self.password = secrets.token_urlsafe(24)
         self.auth_calls, self.commands, self.scripts = [], [], []
+        self.banner_delay = 0  # Delay the real SSH greeting, never execute a shell.
         self.auth_delay = 0
         self.channel_delay = 0  # Delay channel-open confirmation, never execute a shell.
         self.unready_connections = 0  # Close before KEX to model sshd still booting.
@@ -55,6 +55,9 @@ class SSHProtocolServer:
             threading.Thread(target=self._serve, args=(peer,), daemon=True).start()
 
     def _serve(self, peer):
+        if self.banner_delay and self.stop_event.wait(self.banner_delay):
+            peer.close()
+            return
         transport = paramiko.Transport(peer)
         self.transports.append(transport)
         transport.add_server_key(self.key)
@@ -66,12 +69,14 @@ class SSHProtocolServer:
 
             def check_auth_password(self, username, password):
                 state.auth_calls.append(('password', username))
-                if state.auth_delay:
-                    time.sleep(state.auth_delay)
+                if state.auth_delay and state.stop_event.wait(state.auth_delay):
+                    return paramiko.AUTH_FAILED
                 return paramiko.AUTH_SUCCESSFUL if username == 'guest' and secrets.compare_digest(password, state.password) else paramiko.AUTH_FAILED
 
             def check_auth_publickey(self, username, key):
                 state.auth_calls.append(('key', username))
+                if state.auth_delay and state.stop_event.wait(state.auth_delay):
+                    return paramiko.AUTH_FAILED
                 accepted = key.asbytes() == state.client_key.asbytes() or key.asbytes() in state.extra_keys
                 return paramiko.AUTH_SUCCESSFUL if username == 'guest' and accepted else paramiko.AUTH_FAILED
 

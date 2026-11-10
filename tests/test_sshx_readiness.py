@@ -17,7 +17,7 @@ from models import GuestAccess, GuestLease, Job, SSHXSession
 from models.user import utcnow
 from services.background import stop_background
 from services.guest_access import GuestAuthorityError
-from services.guest_ssh import GuestSSHBusyError, GuestSSHChannelNotReadyError, GuestSSHNotReadyError
+from services.guest_ssh import GuestSSH, GuestSSHAuthenticationNotReadyError, GuestSSHBusyError, GuestSSHChannelNotReadyError, GuestSSHNotReadyError
 from services.job_control import cancel_queued
 from services.provisioning import process_job, queue_action, start_worker
 from services.security import decrypt, encrypt
@@ -102,7 +102,7 @@ def test_generate_waits_for_guest_boot_without_replaying_the_installer(app, user
 
 
 @pytest.mark.parametrize('kind', ['sshx_generate', 'sshx_stop'])
-@pytest.mark.parametrize('failure', [GuestSSHNotReadyError, GuestSSHChannelNotReadyError, GuestSSHBusyError])
+@pytest.mark.parametrize('failure', [GuestSSHNotReadyError, GuestSSHAuthenticationNotReadyError, GuestSSHChannelNotReadyError, GuestSSHBusyError])
 def test_boot_wait_has_a_persistent_deadline_independent_of_queue_age(app, users, monkeypatch, kind, failure):
     instance = vm(users[0])
     access(instance)
@@ -119,6 +119,7 @@ def test_boot_wait_has_a_persistent_deadline_independent_of_queue_age(app, users
     instance_id = instance.id
     assert deadline == now + timedelta(seconds=app.config['SSHX_READY_SECONDS'])
     assert waiting['sshx_ready_attempts'] == 1
+    assert waiting['sshx_ready_stage'] == failure().stage
     # A new DB session/worker and a changed operator setting do not reset it.
     db.session.remove()
     app.config['SSHX_READY_SECONDS'] = 900
@@ -133,6 +134,7 @@ def test_boot_wait_has_a_persistent_deadline_independent_of_queue_age(app, users
     assert row.status == 'failed' and row.payload is None
     assert 'Timed out waiting for guest SSH' in row.message
     assert 'No SSHX guest command was sent' in row.message
+    assert 'Last SSH check:' in row.message
     assert command.call_count == 2, 'Expired boot work must not dispatch another guest request'
     assert db.session.get(GuestAccess, instance_id) is not None
     assert db.session.get(SSHXSession, instance_id) is None
@@ -271,3 +273,150 @@ def test_identity_failure_does_not_attempt_a_socket_or_boot_retry(users, monkeyp
     process_job(ident)
     assert db.session.get(Job, ident).status == 'failed'
     dial.assert_not_called()
+
+
+@pytest.mark.parametrize('stage,delay', [('banner', 11), ('authentication', 11), ('channel', 6)])
+def test_slow_ready_guest_completes_without_discarding_a_valid_ssh_connection(app, users, monkeypatch, stage, delay):
+    """Real delayed protocol responses, not a boot or installer simulation.
+
+    These timings exceed the old 10-second greeting/auth and 5-second channel
+    cutoffs. A healthy but CPU-constrained TCG guest must get to finish setup,
+    rather than having every otherwise-valid connection discarded/requeued.
+    """
+    with SSHProtocolServer(lambda script: (0, 'SKVM_RUNNING\nSKVM_SECONDS:60\n' + SYNTHETIC_LINK + '\n')) as server:
+        setattr(server, {'banner': 'banner_delay', 'authentication': 'auth_delay', 'channel': 'channel_delay'}[stage], delay)
+        monkeypatch.setattr(QemuEngine, 'ssh_endpoint', lambda self, spec: server.endpoint)
+        app.config['SSHX_MAX_SECONDS'] = 60
+        instance = vm(users[0], username='guest', ssh_port=server.endpoint[1])
+        db.session.add(GuestAccess(instance_id=instance.id, private_key_encrypted=encrypt({'private_key': server.private_key()})))
+        db.session.commit()
+        ident = queue_action(users[0], instance, 'sshx_generate').id
+        process_job(ident)
+        row = db.session.get(Job, ident, populate_existing=True)
+        assert row.status == 'completed', f'A valid slow {stage} response was discarded: {row.status}: {row.message}'
+        assert row.payload is None
+        assert server.auth_calls == [('key', 'guest')] and server.commands == [b'sh -s']
+        assert len(server.scripts) == 1 and 'curl -sSf https://sshx.io/get | sh' in server.scripts[0]
+
+
+@pytest.mark.parametrize('method', ['key', 'password'])
+def test_silent_authentication_is_retryable_but_never_sends_a_guest_command(app, monkeypatch, method):
+    from services.guest_ssh import fingerprint
+    monkeypatch.setattr('services.guest_ssh.SSH_AUTH_SECONDS', .1)
+    with SSHProtocolServer() as server:
+        server.auth_delay = .4
+        monkeypatch.setattr(QemuEngine, 'ssh_endpoint', lambda self, spec: server.endpoint)
+        spec = {'id': 'c5cf1ba5-58af-4a7c-b5da-aab363605a84', 'engine': 'qemu', 'username': 'guest', 'ssh_port': server.endpoint[1]}
+        auth = ({'method': 'key', 'private_key': server.private_key()} if method == 'key'
+                else {'method': 'password', 'password': server.password})
+        with GuestSSH(spec, fingerprint(server.key)) as connection:
+            with pytest.raises(GuestSSHAuthenticationNotReadyError):
+                connection.authenticate(auth)
+            assert not connection.transport.is_active()
+        assert server.auth_calls == [(method, 'guest')] and server.commands == []
+        # Caller credentials are not altered; only the internal validated copy is cleared.
+        assert auth['method'] == method
+
+
+def test_shared_setup_budget_is_not_restarted_for_authentication(app, monkeypatch):
+    import time
+    monkeypatch.setattr('services.guest_ssh.SSH_SETUP_SECONDS', .25)
+    with SSHProtocolServer() as server:
+        server.banner_delay, server.auth_delay = .1, .4
+        monkeypatch.setattr(QemuEngine, 'ssh_endpoint', lambda self, spec: server.endpoint)
+        spec = {'id': 'c5cf1ba5-58af-4a7c-b5da-aab363605a84', 'engine': 'qemu', 'username': 'guest', 'ssh_port': server.endpoint[1]}
+        started = time.monotonic()
+        with GuestSSH(spec) as connection:
+            with pytest.raises(GuestSSHAuthenticationNotReadyError):
+                connection.authenticate({'method': 'key', 'private_key': server.private_key()})
+        assert time.monotonic() - started < .6
+        assert server.commands == []
+
+
+def test_authority_is_rechecked_while_waiting_for_authentication(app, monkeypatch):
+    with SSHProtocolServer() as server:
+        server.auth_delay = 1
+        monkeypatch.setattr(QemuEngine, 'ssh_endpoint', lambda self, spec: server.endpoint)
+        spec = {'id': 'c5cf1ba5-58af-4a7c-b5da-aab363605a84', 'engine': 'qemu', 'username': 'guest', 'ssh_port': server.endpoint[1]}
+        def guard():
+            if server.auth_calls:
+                raise GuestAuthorityError('Explicit protocol fixture: authority revoked during authentication')
+        with GuestSSH(spec, check=guard) as connection:
+            with pytest.raises(GuestAuthorityError):
+                connection.authenticate({'method': 'key', 'private_key': server.private_key()})
+            assert not connection.transport.is_active()
+        assert server.commands == []
+
+
+def test_total_request_deadline_includes_setup_and_never_makes_exec_retryable(app, monkeypatch):
+    import time
+    monkeypatch.setattr('services.guest_ssh.SSH_REQUEST_SECONDS', .4)
+    def slow_protocol_output(script):
+        time.sleep(.4)
+        return 0, 'fixture output only\n'
+    with SSHProtocolServer(slow_protocol_output) as server:
+        server.auth_delay = .15
+        monkeypatch.setattr(QemuEngine, 'ssh_endpoint', lambda self, spec: server.endpoint)
+        spec = {'id': 'c5cf1ba5-58af-4a7c-b5da-aab363605a84', 'engine': 'qemu', 'username': 'guest', 'ssh_port': server.endpoint[1]}
+        with GuestSSH(spec) as connection:
+            connection.authenticate({'method': 'key', 'private_key': server.private_key()})
+            started = time.monotonic()
+            with pytest.raises(UncertainError):
+                connection.execute('# fixed protocol fixture only\n', seconds=130)
+            assert time.monotonic() - started < .55
+        assert server.commands == [b'sh -s'] and len(server.scripts) == 1
+
+
+@pytest.mark.parametrize('stage', [None, 3, {}, [], 'secret-from-untrusted-remote-response'])
+def test_retry_stage_is_an_enum_never_raw_remote_output(stage):
+    from services.guest_ssh import retry_error
+    error = retry_error('guest_ssh_not_ready', stage)
+    assert error.stage == 'handshake'
+    assert 'secret-from-untrusted' not in str(error)
+
+
+def test_request_budget_fits_the_existing_admission_and_proxy_bounds():
+    from engines.node_engine import GUEST_RESPONSE_SECONDS, RESPONSE_SECONDS
+    from services.guest_ssh import SSH_LEASE_SECONDS, SSH_SETUP_SECONDS, SSH_REQUEST_SECONDS
+    assert SSH_SETUP_SECONDS + 130 <= SSH_REQUEST_SECONDS < GUEST_RESPONSE_SECONDS < 180
+    # Include capability-response and TLS-connect overhead before the panel
+    # gets to wait for the agent; a live request must not lose its admission.
+    assert RESPONSE_SECONDS + 3 + 5 + GUEST_RESPONSE_SECONDS < SSH_LEASE_SECONDS
+
+
+def test_setup_expiry_after_channel_open_prevents_even_an_exec_request(app, monkeypatch):
+    import time
+    with SSHProtocolServer() as server:
+        monkeypatch.setattr(QemuEngine, 'ssh_endpoint', lambda self, spec: server.endpoint)
+        spec = {'id': 'c5cf1ba5-58af-4a7c-b5da-aab363605a84', 'engine': 'qemu', 'username': 'guest', 'ssh_port': server.endpoint[1]}
+        with GuestSSH(spec) as connection:
+            connection.authenticate({'method': 'key', 'private_key': server.private_key()})
+            original = connection.transport.open_session
+            def expired_channel(*args, **kwargs):
+                channel = original(*args, **kwargs)
+                connection.setup_deadline = time.monotonic() - 1
+                return channel
+            monkeypatch.setattr(connection.transport, 'open_session', expired_channel)
+            with pytest.raises(GuestSSHChannelNotReadyError):
+                connection.execute('# fixed protocol fixture only\n')
+        assert server.auth_calls == [('key', 'guest')] and server.commands == []
+
+
+def test_last_expiring_attempt_reports_its_actual_stage_not_an_older_guess(app, users, monkeypatch):
+    instance = vm(users[0])
+    access(instance)
+    _, command = guest_boundary(monkeypatch)
+    app.config['SSHX_READY_SECONDS'] = 60
+    now = utcnow()
+    monkeypatch.setattr('services.provisioning.utcnow', lambda: now)
+    def expires_during_auth(*args, **kwargs):
+        nonlocal now
+        now += timedelta(seconds=61)
+        raise GuestSSHAuthenticationNotReadyError()
+    command.side_effect = expires_during_auth
+    ident = queue_action(users[0], instance, 'sshx_generate').id
+    process_job(ident)
+    row = db.session.get(Job, ident, populate_existing=True)
+    assert row.status == 'failed' and row.payload is None
+    assert 'Last SSH check: the guest has not answered SSH authentication' in row.message
+    command.assert_called_once()

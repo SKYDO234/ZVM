@@ -142,15 +142,20 @@ def test_untrusted_node_fingerprint_result_is_not_saved(app, monkeypatch):
         sshx.dispatch(spec, 'verify', node=node, private='not-used-at-explicit-transport-boundary', host_fingerprint='SHA256:' + 'A' * 43)
 
 
-@pytest.mark.parametrize('failure', ['handshake', 'channel'])
+@pytest.mark.parametrize('failure', ['handshake', 'authentication', 'channel'])
 def test_tls_node_reports_boot_wait_as_a_fixed_pre_command_code(tls_guest, caplog, monkeypatch, failure):
     import paramiko
-    from services.guest_ssh import GuestSSHChannelNotReadyError, GuestSSHNotReadyError
+    from services.guest_ssh import GuestSSHAuthenticationNotReadyError, GuestSSHChannelNotReadyError, GuestSSHNotReadyError
     _, node, spec, ssh, _ = tls_guest
     expected = GuestSSHNotReadyError
     before_auth = []
     if failure == 'handshake':
         ssh.unready_connections = 1
+    elif failure == 'authentication':
+        expected = GuestSSHAuthenticationNotReadyError
+        before_auth = [('key', 'guest')]
+        ssh.auth_delay = .4
+        monkeypatch.setattr('services.guest_ssh.SSH_AUTH_SECONDS', .1)
     else:
         expected = GuestSSHChannelNotReadyError
         before_auth = [('key', 'guest')]
@@ -164,9 +169,11 @@ def test_tls_node_reports_boot_wait_as_a_fixed_pre_command_code(tls_guest, caplo
             return original(transport, *args, **kwargs)
 
         monkeypatch.setattr(paramiko.Transport, 'open_session', unready_channel)
-    with pytest.raises(expected):
+    with pytest.raises(expected) as caught:
         sshx.dispatch(spec, 'generate', node=node, private=ssh.private_key(), operation_id=str(uuid.uuid4()))
+    assert caught.value.stage == {'handshake': 'banner', 'authentication': 'authentication', 'channel': 'channel'}[failure]
     assert ssh.auth_calls == before_auth and ssh.commands == []
+    ssh.auth_delay = 0
     value = sshx.dispatch(spec, 'generate', node=node, private=ssh.private_key(), operation_id=str(uuid.uuid4()))
     assert value['state'] == 'generated' and value['link'] == LINK
     assert ssh.auth_calls == before_auth + [('key', 'guest')] and ssh.commands == [b'sh -s']

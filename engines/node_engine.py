@@ -11,6 +11,8 @@ from services.security import decrypt, validate_url
 from services import node_protocol
 
 RESPONSE_SECONDS = 30
+# GuestSSH's complete request is capped at 170s, below the 180s lease/proxy.
+GUEST_RESPONSE_SECONDS = 175
 
 
 class NodeEngine:
@@ -29,7 +31,7 @@ class NodeEngine:
         session.trust_env = False
         try:
             read_only = method == 'GET' and path.startswith(('/v1/capabilities', '/v1/instances'))
-            timeout = (5, 150) if sensitive else ((3, 5) if read_only else (5, 20))
+            timeout = (5, GUEST_RESPONSE_SECONDS) if sensitive else ((3, 5) if read_only else (5, 20))
             with session.request(method, self.node.url.rstrip('/') + path, json=payload,
                                  headers={'Authorization': f'Bearer {token}'}, timeout=timeout, stream=True, allow_redirects=False, verify=current_app.config.get('NODE_CA_BUNDLE') or True) as response:
                 if response.status_code == 404 and missing_ok:
@@ -43,7 +45,7 @@ class NodeEngine:
                 started = time.monotonic()
                 while chunk := response.raw.read1(65536, decode_content=True):
                     body.extend(chunk)
-                    if len(body) > (65536 if sensitive else 2**20) or time.monotonic() - started > (150 if sensitive else RESPONSE_SECONDS):
+                    if len(body) > (65536 if sensitive else 2**20) or time.monotonic() - started > (GUEST_RESPONSE_SECONDS if sensitive else RESPONSE_SECONDS):
                         raise UncertainError('External response exceeded the safe size/time limit. Actual operation state is unknown.')
                 try:
                     data = json.loads(body)
@@ -58,10 +60,10 @@ class NodeEngine:
                     # retryable. HTTP 5xx, lost responses and unknown outcomes
                     # must retain their existing uncertain/non-replaying path.
                     if sensitive and response.status_code == 409 and isinstance(data, dict):
-                        from services.guest_ssh import SSH_RETRY_ERRORS
+                        from services.guest_ssh import SSH_RETRY_ERRORS, retry_error
                         code = data.get('code')
                         if isinstance(code, str) and code in SSH_RETRY_ERRORS:
-                            raise SSH_RETRY_ERRORS[code]()
+                            raise retry_error(code, data.get('stage'))
                     detail = ('Guest SSH request rejected. Check guest readiness, enrollment, network policy and node version.' if sensitive else
                               (str(data.get('error', 'Request was rejected.'))[:1000] if isinstance(data, dict) else 'Request was rejected.'))
                     detail = detail.replace(token, '[redacted]')

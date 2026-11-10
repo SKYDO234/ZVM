@@ -213,7 +213,8 @@
         const data = await api('/api/jobs/' + sshxTask.dataset.sshxJob, {signal: controller.signal});
         warned = false;
         const state = $('[data-sshx-state]', sshxTask), message = $('[data-sshx-message]', sshxTask);
-        if (state) state.textContent = String(data.status).replace(/^./, c => c.toUpperCase());
+        if (state) state.textContent = data.status === 'queued' && String(data.message).startsWith('Waiting for guest SSH:')
+          ? 'Waiting for guest SSH' : String(data.status).replace(/^./, c => c.toUpperCase());
         if (message) message.textContent = data.message;
         if (!['queued','running','uncertain'].includes(data.status)) {
           clearInterval(timer);

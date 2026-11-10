@@ -183,7 +183,7 @@ def guest_ssh(ident):
     except GuestSSHRetryableError as exc:
         # A fixed code, not raw banners/output or credentials, permits only a
         # proven pre-command retry on the controlling panel.
-        return jsonify(error=str(exc), code=exc.code), 409
+        return jsonify(error=str(exc), code=exc.code, stage=exc.stage), 409
     except (EngineError, BlockingIOError, TypeError, AttributeError, KeyError):
         return jsonify(error='Guest operation rejected. Check the managed target, guest readiness, credentials and network policy.'), 409
     finally:

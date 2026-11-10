@@ -10,7 +10,7 @@ from models import GuestAccess, Job, Node, SSHXSession, User, VPS
 from models.user import utcnow
 from services.security import audit, decrypt, encrypt, integer, locked, safe_message, settings
 from services.validation import capacity_check, quota_check
-from services.guest_ssh import GuestSSHBusyError, GuestSSHRetryableError, admission, new_key
+from services.guest_ssh import READINESS_STAGES, GuestSSHRetryableError, admission, new_key
 from services.guest_access import GuestGuard
 from services import sshx
 from services.job_control import execution_lock
@@ -24,13 +24,18 @@ SSHX_READY_TIMEOUT = ('Timed out waiting for guest SSH readiness/admission. No S
                      'The VPS was not reset; an existing client is not claimed stopped.')
 
 
+def _sshx_timeout(payload):
+    stage = READINESS_STAGES.get(payload.get('sshx_ready_stage'))
+    return SSHX_READY_TIMEOUT + (f' Last SSH check: {stage}.' if stage else '')
+
+
 def _sshx_due(payload):
     """Persist a boot budget separate from queue age and client lifetime."""
     now = utcnow()
     deadline = payload.setdefault('sshx_ready_deadline',
                                   (now + timedelta(seconds=current_app.config['SSHX_READY_SECONDS'])).isoformat())
     if now >= datetime.fromisoformat(deadline):
-        raise EngineError(SSHX_READY_TIMEOUT)
+        raise EngineError(_sshx_timeout(payload))
     retry_at = payload.get('sshx_retry_at')
     return retry_at is None or now >= datetime.fromisoformat(retry_at)
 
@@ -42,6 +47,7 @@ def _defer_sshx(job, payload, error):
     error, exec submission, timeout after mutation or lost node response.
     """
     now = utcnow()
+    payload['sshx_ready_stage'] = error.stage
     remaining = (datetime.fromisoformat(payload['sshx_ready_deadline']) - now).total_seconds()
     if remaining <= 0:
         return False
@@ -49,10 +55,9 @@ def _defer_sshx(job, payload, error):
     payload['sshx_retry_at'] = (now + timedelta(seconds=delay)).isoformat()
     payload['sshx_ready_attempts'] = payload.get('sshx_ready_attempts', 0) + 1
     payload.pop('sshx_started_at', None)  # Waiting must not consume a future client's TTL.
-    reason = ('connection admission is busy; existing concurrency/rate limits remain enforced' if isinstance(error, GuestSSHBusyError)
-              else 'Linux/cloud-init/sshd may still be booting, especially under TCG')
+    reason = READINESS_STAGES[error.stage]
     job.status, job.payload = 'queued', encrypt(payload)
-    job.message = (f'Waiting for guest SSH: {reason}. Automatic retry in {delay:g} seconds '
+    job.message = (f'Waiting for guest SSH: {reason} (attempt {payload["sshx_ready_attempts"]}). Automatic retry in {delay:g} seconds '
                    f'({int(remaining)} seconds left in the boot-readiness window). '
                    'No SSHX guest command has been sent; other eligible VMs can proceed.')
     db.session.commit()
@@ -405,7 +410,7 @@ def _process_job(job_id):
         if job.kind in SSHX_JOBS and isinstance(exc, GuestSSHRetryableError):
             if _defer_sshx(job, payload, exc):
                 return False
-            exc = EngineError(SSHX_READY_TIMEOUT)
+            exc = EngineError(_sshx_timeout(payload))
         if mutated and not isinstance(exc, EngineError):
             job.status = 'uncertain'
             job.message = 'An engine mutation may have completed before an internal or persistence error. Inspect actual resources before recovery.'
